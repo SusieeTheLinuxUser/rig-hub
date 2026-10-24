@@ -16,7 +16,7 @@ jobs:
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, name: x86_64-linux }
           - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, name: aarch64-linux }
           - { os: macos-14, target: aarch64-apple-darwin, name: aarch64-macos }
-          - { os: macos-13, target: x86_64-apple-darwin, name: x86_64-macos }
+          - { os: macos-14, target: x86_64-apple-darwin, name: x86_64-macos } # Apple Silicon cross-builds Intel; Intel runners queue forever
           - { os: windows-latest, target: x86_64-pc-windows-msvc, name: x86_64-windows }
     runs-on: ${{ matrix.os }}
     steps:
@@ -42,4 +42,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: rig-hub-${{ matrix.name }}.*
-          prerelease: true
+          make_latest: true # installers use releases/latest, which skips pre-releases
