@@ -1,0 +1,45 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, name: x86_64-linux }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, name: aarch64-linux }
+          - { os: macos-14, target: aarch64-apple-darwin, name: aarch64-macos }
+          - { os: macos-13, target: x86_64-apple-darwin, name: x86_64-macos }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: x86_64-windows }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+      - run: cargo test --release --target ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: package
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a ../../../rig-hub-${{ matrix.name }}.zip rig-hub.exe
+          else
+            cp ../../../assets/rig-hub.svg .
+            tar -czf ../../../rig-hub-${{ matrix.name }}.tar.gz rig-hub rig-hub.svg
+          fi
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: rig-hub-${{ matrix.name }}.*
+          prerelease: true

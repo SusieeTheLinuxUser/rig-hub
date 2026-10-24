@@ -1,0 +1,36 @@
+[package]
+name = "rig-hub"
+version = "0.1.0-alpha.1"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "One app for your mouse, cooler LCD, headset and mic on Linux"
+repository = "https://github.com/SusieeTheLinuxUser/rig-hub"
+
+[dependencies]
+anyhow = "1"
+dirs = "7"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+imageproc = { version = "0.27", default-features = false }
+notify-rust = "4"
+nusb = "0.2"
+resvg = { version = "0.49", default-features = false, features = ["text"] }
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
+urlencoding = "2"
+webbrowser = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+hidapi = { version = "2.6", default-features = false, features = ["linux-native"] }
+zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+hidapi = "2.6"
