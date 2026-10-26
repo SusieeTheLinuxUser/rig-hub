@@ -8,6 +8,9 @@ fn run(cmd: &str, args: &[&str]) -> Result<String> {
         .args(args)
         .output()
         .with_context(|| format!("{cmd} not found"))?;
+    if !out.status.success() {
+        bail!("{cmd}: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -170,5 +173,11 @@ mod tests {
         let off = r#"{"devices":[{"battery":{"status":"BATTERY_UNAVAILABLE"}}]}"#;
         assert_eq!(parse_headset(off).unwrap().unwrap().battery, Battery::Off);
         assert_eq!(parse_headset(r#"{"devices":[]}"#).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_command_is_an_error() {
+        assert!(run("sh", &["-c", "exit 1"]).is_err());
     }
 }
