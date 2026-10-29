@@ -232,15 +232,18 @@ fn status_rows(st: &State) -> Vec<(String, String)> {
     rows
 }
 
-/// Somewhere only this user can write: never a shared /tmp, where another user could plant files.
-fn private_dir() -> PathBuf {
-    dirs::runtime_dir().or_else(dirs::cache_dir).unwrap_or_else(std::env::temp_dir)
+/// Somewhere only this user can write, never a shared /tmp where another user could plant files
+/// or symlinks. None if there's no such place: the status file and window raising are skipped.
+fn private_dir() -> Option<PathBuf> {
+    let dir = dirs::runtime_dir().or_else(dirs::cache_dir)?;
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 /// For the KDE widget (`plasmoid/`), which polls this file while Rig Hub runs. The widget looks in
 /// the same place: `${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}`.
-fn status_path() -> PathBuf {
-    private_dir().join("rig-hub-status.json")
+fn status_path() -> Option<PathBuf> {
+    Some(private_dir()?.join("rig-hub-status.json"))
 }
 
 fn write_status(st: &State, rows: &[(String, String)]) -> bool {
@@ -248,7 +251,9 @@ fn write_status(st: &State, rows: &[(String, String)]) -> bool {
         Some(audio::Battery::Level(p) | audio::Battery::Charging(Some(p))) => format!("{p}%"),
         _ => String::new(),
     };
-    write_atomic(&status_path(), &serde_json::json!({ "panel": panel, "rows": rows }).to_string())
+    // nowhere to write: nothing to retry either
+    let Some(path) = status_path() else { return true };
+    write_atomic(&path, &serde_json::json!({ "panel": panel, "rows": rows }).to_string())
 }
 
 /// Write then rename, so readers (the widget, Plasma) never see half a file.
@@ -518,7 +523,7 @@ fn kwin_raise() {
     fn raise() {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        let script = private_dir().join("rig-hub-raise.js");
+        let Some(script) = private_dir().map(|d| d.join("rig-hub-raise.js")) else { return };
         let js = r#"for (const w of workspace.windowList()) if (w.resourceClass === "rig-hub") { w.minimized = false; workspace.activeWindow = w; }"#;
         // KWin runs whatever is in this file, so nobody else may be able to write it
         let _ = std::fs::remove_file(&script);
@@ -1355,8 +1360,8 @@ fn main() -> eframe::Result {
         },
     };
     // numbers from a previous run would look live until our first refresh
-    if screenshot.is_none() {
-        let _ = std::fs::remove_file(status_path());
+    if let (None, Some(path)) = (&screenshot, status_path()) {
+        let _ = std::fs::remove_file(path);
     }
     #[cfg(target_os = "linux")]
     install_widget();
