@@ -1,4 +1,4 @@
-//! Headset via the `headsetcontrol` CLI, USB mic via `amixer`.
+//! Headset via the `headsetcontrol` CLI, USB mic via `amixer`, other batteries via `upower`.
 
 use anyhow::{Context, Result, bail};
 use std::process::Command;
@@ -70,6 +70,46 @@ pub fn headset_set(flag: &str, value: u32) -> Result<()> {
         bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(())
+}
+
+// -------------------------------------------------------------- batteries
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PowerDevice {
+    pub name: String,
+    /// "57%", or a coarse level like "low" for devices that only report one
+    pub level: String,
+    pub charging: bool,
+}
+
+/// Battery-powered devices UPower knows about (UPS, wireless mice, controllers…) from `upower --dump`.
+pub fn parse_upower(text: &str) -> Vec<PowerDevice> {
+    text.split("\n\n")
+        .filter_map(|block| {
+            let field = |k: &str| block.lines().find_map(|l| l.trim().strip_prefix(k)).map(str::trim);
+            let path = field("Device:")?;
+            if path.ends_with("DisplayDevice") {
+                return None; // the summary of all batteries, not a device
+            }
+            // "57%" or, in some locales, "57,5%"
+            let percent: u8 = field("percentage:")?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+            // with a coarse battery-level, UPower's percentage is only a guess
+            let level = match field("battery-level:") {
+                Some(l) if !matches!(l, "none" | "unknown") => l.to_string(),
+                _ => format!("{percent}%"),
+            };
+            Some(PowerDevice {
+                // no model: the object name (e.g. "mouse_hidpp_battery_0") at least tells two apart
+                name: field("model:").filter(|m| !m.is_empty()).unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path)).to_string(),
+                level,
+                charging: field("state:") == Some("charging"),
+            })
+        })
+        .collect()
+}
+
+pub fn batteries() -> Vec<PowerDevice> {
+    run("upower", &["--dump"]).map(|t| parse_upower(&t)).unwrap_or_default()
 }
 
 // -------------------------------------------------------------------- mic
@@ -178,6 +218,44 @@ mod tests {
         let off = r#"{"devices":[{"battery":{"status":"BATTERY_UNAVAILABLE"}}]}"#;
         assert_eq!(parse_headset(off).unwrap().unwrap().battery, Battery::Off);
         assert_eq!(parse_headset(r#"{"devices":[]}"#).unwrap(), None);
+    }
+
+    #[test]
+    fn upower() {
+        let dump = "Device: /org/freedesktop/UPower/devices/ups_hiddev1
+  model:                Back-UPS ES 650G2
+  ups
+    state:               fully-charged
+    percentage:          100%
+
+Device: /org/freedesktop/UPower/devices/mouse_hidpp_battery_0
+  model:                G305
+  mouse
+    state:               charging
+    percentage:          57,5%
+
+Device: /org/freedesktop/UPower/devices/gaming_input_0
+  gaming-input
+    state:               discharging
+    percentage:          55%
+    battery-level:       low
+
+Device: /org/freedesktop/UPower/devices/line_power_AC
+  line-power
+    online:              yes
+
+Device: /org/freedesktop/UPower/devices/DisplayDevice
+  ups
+    percentage:          100%
+";
+        assert_eq!(
+            parse_upower(dump),
+            [
+                PowerDevice { name: "Back-UPS ES 650G2".into(), level: "100%".into(), charging: false },
+                PowerDevice { name: "G305".into(), level: "57%".into(), charging: true },
+                PowerDevice { name: "gaming_input_0".into(), level: "low".into(), charging: false },
+            ]
+        );
     }
 
     #[cfg(unix)]

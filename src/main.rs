@@ -138,9 +138,9 @@ enum TrayMsg {
 
 struct Tray {
     _icon: tray_icon::TrayIcon,
-    headset: MenuItem,
-    liquid: MenuItem,
-    dpi: MenuItem,
+    menu: Menu,
+    /// greyed-out status rows at the top of the menu, one per `status_rows` entry
+    rows: Vec<MenuItem>,
     show: MenuItem,
     bug: MenuItem,
     quit: MenuItem,
@@ -149,20 +149,18 @@ struct Tray {
 
 impl Tray {
     fn new(ctx: &workers::Context, tx: Sender<TrayMsg>) -> Option<Self> {
-        let info = |t: &str| MenuItem::new(t, false, None);
-        let (headset, liquid, dpi) = (info("Headset: …"), info("Liquid: …"), info("Mouse: …"));
         let show = MenuItem::new("Open Rig Hub", true, None);
         let bug = MenuItem::new("Report a bug…", true, None);
         let quit = MenuItem::new("Quit", true, None);
         let menu = Menu::new();
-        menu.append_items(&[&headset, &liquid, &dpi, &PredefinedMenuItem::separator(), &show, &bug, &quit]).ok()?;
+        menu.append_items(&[&PredefinedMenuItem::separator(), &show, &bug, &quit]).ok()?;
         let icon = tray_icon::Icon::from_rgba(icon_rgba(64), 64, 64).ok()?;
         let tray = tray_icon::TrayIconBuilder::new()
             .with_id("rig-hub")
             .with_title("Rig Hub")
             .with_tooltip("Rig Hub")
             .with_icon(icon)
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(menu.clone()))
             .with_menu_on_left_click(false)
             .build()
             .ok()?;
@@ -178,34 +176,85 @@ impl Tray {
                 c.request_repaint();
             }
         }));
-        Some(Self { _icon: tray, headset, liquid, dpi, show, bug, quit, last: String::new() })
+        Some(Self { _icon: tray, menu, rows: Vec::new(), show, bug, quit, last: String::new() })
     }
 
     fn refresh(&mut self, st: &State) {
-        let headset = match st.headset.ok().map(|h| &h.battery) {
-            Some(audio::Battery::Level(p)) => format!("🎧 Headset  {p}%"),
-            Some(audio::Battery::Charging(Some(p))) => format!("🎧 Headset  {p}% ⚡"),
-            Some(audio::Battery::Charging(None)) => "🎧 Headset  charging ⚡".into(),
-            _ => "🎧 Headset  off".into(),
-        };
-        let liquid = match st.cooler.ok().and_then(|c| c.status.as_ref()) {
-            Some(s) => format!("💧 Liquid  {:.1} °C", s.liquid_c),
-            None => "💧 Liquid  –".into(),
-        };
-        let dpi = match current_dpi(st) {
-            Some(d) => format!("🖱 Mouse  {d} DPI"),
-            None => "🖱 Mouse  –".into(),
-        };
-        let all = format!("{headset}\n{liquid}\n{dpi}");
-        if all == self.last {
+        let rows = status_rows(st);
+        let all = rows.iter().map(|(l, v)| format!("{l}  {v}")).collect::<Vec<_>>();
+        let joined = all.join("\n");
+        if joined == self.last {
             return;
         }
-        self.headset.set_text(&headset);
-        self.liquid.set_text(&liquid);
-        self.dpi.set_text(&dpi);
-        let _ = self._icon.set_tooltip(Some(&all));
-        self.last = all;
+        if self.rows.len() != rows.len() {
+            // a battery came or went
+            for item in self.rows.drain(..) {
+                let _ = self.menu.remove(&item);
+            }
+            for i in 0..rows.len() {
+                let item = MenuItem::new("", false, None);
+                let _ = self.menu.insert(&item, i);
+                self.rows.push(item);
+            }
+        }
+        for (item, text) in self.rows.iter().zip(&all) {
+            item.set_text(text);
+        }
+        let _ = self._icon.set_tooltip(Some(&joined));
+        // on a failed write keep `last` stale, so the next refresh tries again
+        if write_status(st, &rows) {
+            self.last = joined;
+        }
     }
+}
+
+/// (label, value) for everything worth a glance: the tray menu and the KDE widget both show these.
+fn status_rows(st: &State) -> Vec<(String, String)> {
+    let mut rows = vec![(
+        "🎧 Headset".to_string(),
+        match st.headset.ok().map(|h| &h.battery) {
+            Some(audio::Battery::Level(p)) => format!("{p}%"),
+            Some(audio::Battery::Charging(Some(p))) => format!("{p}% ⚡"),
+            Some(audio::Battery::Charging(None)) => "charging ⚡".into(),
+            _ => "off".into(),
+        },
+    )];
+    for b in &st.batteries {
+        rows.push((format!("🔋 {}", b.name), format!("{}{}", b.level, if b.charging { " ⚡" } else { "" })));
+    }
+    let status = st.cooler.ok().and_then(|c| c.status.as_ref());
+    let or_dash = |v: Option<String>| v.unwrap_or_else(|| "–".into());
+    rows.push(("💧 Liquid".into(), or_dash(status.map(|s| format!("{:.1} °C", s.liquid_c)))));
+    rows.push(("🌡 CPU".into(), or_dash(st.cpu_c.map(|c| format!("{c:.0} °C")))));
+    rows.push(("🌀 Pump".into(), or_dash(status.map(|s| format!("{} rpm", s.pump_rpm)))));
+    rows.push(("🌀 Fans".into(), or_dash(status.map(|s| format!("{} rpm", s.fan_rpm)))));
+    rows.push(("🖱 Mouse".into(), or_dash(current_dpi(st).map(|d| format!("{d} DPI")))));
+    rows
+}
+
+/// Somewhere only this user can write: never a shared /tmp, where another user could plant files.
+fn private_dir() -> PathBuf {
+    dirs::runtime_dir().or_else(dirs::cache_dir).unwrap_or_else(std::env::temp_dir)
+}
+
+/// For the KDE widget (`plasmoid/`), which polls this file while Rig Hub runs. The widget looks in
+/// the same place: `${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}`.
+fn status_path() -> PathBuf {
+    private_dir().join("rig-hub-status.json")
+}
+
+fn write_status(st: &State, rows: &[(String, String)]) -> bool {
+    let panel = match st.headset.ok().map(|h| &h.battery) {
+        Some(audio::Battery::Level(p) | audio::Battery::Charging(Some(p))) => format!("{p}%"),
+        _ => String::new(),
+    };
+    write_atomic(&status_path(), &serde_json::json!({ "panel": panel, "rows": rows }).to_string())
+}
+
+/// Write then rename, so readers (the widget, Plasma) never see half a file.
+fn write_atomic(path: &Path, body: &str) -> bool {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, path).is_ok()
 }
 
 #[cfg(target_os = "linux")]
@@ -383,7 +432,8 @@ impl App {
             });
         }
         Self {
-            tray: Tray::new(&repaint, tx),
+            // test runs stay out of the tray and the widget's status file
+            tray: screenshot.is_none().then(|| Tray::new(&repaint, tx)).flatten(),
             st,
             w,
             repaint,
@@ -411,6 +461,7 @@ impl App {
         self.diagram = None;
         self.preview = None;
         self.repaint.set(ctx);
+        kwin_raise();
     }
 
     fn closes_to_tray(&self) -> bool {
@@ -449,6 +500,81 @@ impl App {
     }
 }
 
+/// Wayland ignores an app focusing its own window (winit's `focus_window` is a no-op there), so ask
+/// KWin to do it with a one-off script. Off KDE the D-Bus calls fail and nothing happens.
+#[cfg(target_os = "linux")]
+fn kwin_raise() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // both raisers would register the same script name, and KWin refuses the second
+    static RAISING: AtomicBool = AtomicBool::new(false);
+    if RAISING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        raise();
+        RAISING.store(false, Ordering::SeqCst);
+    });
+
+    fn raise() {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let script = private_dir().join("rig-hub-raise.js");
+        let js = r#"for (const w of workspace.windowList()) if (w.resourceClass === "rig-hub") { w.minimized = false; workspace.activeWindow = w; }"#;
+        // KWin runs whatever is in this file, so nobody else may be able to write it
+        let _ = std::fs::remove_file(&script);
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&script)
+            .and_then(|mut f| f.write_all(js.as_bytes()));
+        if written.is_err() {
+            return;
+        }
+        let kwin = |path: &str, method: &str, args: &[&str]| {
+            std::process::Command::new("dbus-send")
+                .args(["--session", "--print-reply", "--dest=org.kde.KWin", path, method])
+                .args(args)
+                .output()
+                .ok()
+        };
+        // a freshly opened window may not be mapped yet, so try again a bit later
+        for wait in [250, 750] {
+            std::thread::sleep(Duration::from_millis(wait));
+            kwin("/Scripting", "org.kde.kwin.Scripting.unloadScript", &["string:rig-hub-raise"]);
+            let Some(out) = kwin("/Scripting", "org.kde.kwin.Scripting.loadScript", &[&format!("string:{}", script.display()), "string:rig-hub-raise"]) else {
+                return; // no dbus-send
+            };
+            // the reply ends with "int32 <script id>"
+            if let Some(id) = String::from_utf8_lossy(&out.stdout).split_whitespace().last() {
+                kwin(&format!("/Scripting/Script{id}"), "org.kde.kwin.Script.run", &[]);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250)); // let the last run finish before unloading
+        kwin("/Scripting", "org.kde.kwin.Scripting.unloadScript", &["string:rig-hub-raise"]);
+    }
+}
+
+/// The KDE widget (`plasmoid/`) ships inside the binary, so updating Rig Hub updates the widget too.
+/// Plasma loads the new version the next time the widget is added or Plasma restarts.
+#[cfg(target_os = "linux")]
+fn install_widget() {
+    if !std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().contains("KDE") {
+        return;
+    }
+    let Some(dir) = dirs::data_dir().map(|d| d.join("plasma/plasmoids/com.susiee.righub")) else { return };
+    for (file, body) in [
+        ("metadata.json", include_str!("../plasmoid/metadata.json")),
+        ("contents/ui/main.qml", include_str!("../plasmoid/contents/ui/main.qml")),
+    ] {
+        let path = dir.join(file);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(body) {
+            let _ = path.parent().map(std::fs::create_dir_all);
+            write_atomic(&path, body);
+        }
+    }
+}
+
 fn load_logo(ctx: &egui::Context) -> TextureHandle {
     ctx.load_texture("logo", egui::ColorImage::from_rgba_unmultiplied([96, 96], &icon_rgba(96)), egui::TextureOptions::LINEAR)
 }
@@ -475,6 +601,8 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                #[cfg(target_os = "linux")]
+                kwin_raise();
             }
         }
 
@@ -1224,6 +1352,12 @@ fn main() -> eframe::Result {
             Err(()) => return Ok(()),
         },
     };
+    // numbers from a previous run would look live until our first refresh
+    if screenshot.is_none() {
+        let _ = std::fs::remove_file(status_path());
+    }
+    #[cfg(target_os = "linux")]
+    install_widget();
     let icon = egui::IconData { rgba: icon_rgba(128), width: 128, height: 128 };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

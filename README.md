@@ -29,7 +29,8 @@ irm https://raw.githubusercontent.com/SusieeTheLinuxUser/rig-hub/main/install.ps
 | ❄ **Cooler** | Liquid, CPU, pump and fan readouts. Put any image or GIF on the LCD, rotate it to any angle (handy for upside-down mounts), set brightness. |
 | 🎧 **Headset** | Battery level, sidetone, auto power-off. Low-battery warning. |
 | 🎤 **Mic** | Mute (in sync with the hardware button), gain, monitoring, headphone volume. |
-| 📌 **Tray** | Headset battery, liquid temp and current DPI in the system tray. Closing the window keeps it there. |
+| 📌 **Tray** | Batteries (headset, plus anything UPower sees: UPS, wireless mice, controllers), temps, pump/fan speeds and current DPI in the tray menu. Closing the window keeps it there. |
+| 🧩 **KDE widget** | The same at a glance in your Plasma panel: add "Rig Hub" from Add Widgets (Plasma 6). Rig Hub installs it on KDE and keeps it updated along with the app. Needs Rig Hub running. |
 | 🎨 **Themes** | Midnight, Daylight, Catppuccin Mocha, Nord, Dracula, Gruvbox. |
 
 ## Supported hardware
