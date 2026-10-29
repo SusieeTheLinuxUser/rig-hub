@@ -2,7 +2,7 @@
 //! reads `State` and sends commands; all device I/O happens here.
 
 use crate::{audio, kraken};
-use eframe::egui::Context;
+use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -113,6 +113,20 @@ pub struct State {
 }
 
 pub type Shared = Arc<Mutex<State>>;
+
+/// Repaints whichever window is open; on Linux closing to the tray destroys the window and reopening makes a new one.
+#[derive(Clone, Default)]
+pub struct Context(Arc<Mutex<egui::Context>>);
+
+impl Context {
+    pub fn set(&self, ctx: &egui::Context) {
+        *self.0.lock().unwrap() = ctx.clone();
+    }
+
+    pub fn request_repaint(&self) {
+        self.0.lock().unwrap().request_repaint();
+    }
+}
 
 fn update(st: &Shared, ctx: &Context, f: impl FnOnce(&mut State)) {
     f(&mut st.lock().unwrap());
