@@ -521,6 +521,26 @@ fn kwin_raise() {
     });
 }
 
+/// The KDE widget (`plasmoid/`) ships inside the binary, so updating Rig Hub updates the widget too.
+/// Plasma loads the new version the next time the widget is added or Plasma restarts.
+#[cfg(target_os = "linux")]
+fn install_widget() {
+    if !std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().contains("KDE") {
+        return;
+    }
+    let Some(dir) = dirs::data_dir().map(|d| d.join("plasma/plasmoids/com.susiee.righub")) else { return };
+    for (file, body) in [
+        ("metadata.json", include_str!("../plasmoid/metadata.json")),
+        ("contents/ui/main.qml", include_str!("../plasmoid/contents/ui/main.qml")),
+    ] {
+        let path = dir.join(file);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(body) {
+            let _ = path.parent().map(std::fs::create_dir_all);
+            let _ = std::fs::write(&path, body);
+        }
+    }
+}
+
 fn load_logo(ctx: &egui::Context) -> TextureHandle {
     ctx.load_texture("logo", egui::ColorImage::from_rgba_unmultiplied([96, 96], &icon_rgba(96)), egui::TextureOptions::LINEAR)
 }
@@ -1300,6 +1320,8 @@ fn main() -> eframe::Result {
             Err(()) => return Ok(()),
         },
     };
+    #[cfg(target_os = "linux")]
+    install_widget();
     let icon = egui::IconData { rgba: icon_rgba(128), width: 128, height: 128 };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
