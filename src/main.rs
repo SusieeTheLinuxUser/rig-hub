@@ -448,6 +448,7 @@ impl App {
         self.diagram = None;
         self.preview = None;
         self.repaint.set(ctx);
+        kwin_raise();
     }
 
     fn closes_to_tray(&self) -> bool {
@@ -486,6 +487,40 @@ impl App {
     }
 }
 
+/// Wayland ignores an app focusing its own window (winit's `focus_window` is a no-op there), so ask
+/// KWin to do it with a one-off script. Off KDE the D-Bus calls fail and nothing happens.
+#[cfg(target_os = "linux")]
+fn kwin_raise() {
+    std::thread::spawn(|| {
+        let script = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("rig-hub-raise.js");
+        let js = r#"for (const w of workspace.windowList()) if (w.resourceClass === "rig-hub") { w.minimized = false; workspace.activeWindow = w; }"#;
+        if std::fs::write(&script, js).is_err() {
+            return;
+        }
+        let kwin = |path: &str, method: &str, args: &[&str]| {
+            std::process::Command::new("dbus-send")
+                .args(["--session", "--print-reply", "--dest=org.kde.KWin", path, method])
+                .args(args)
+                .output()
+                .ok()
+        };
+        // a freshly opened window may not be mapped yet, so try again a bit later
+        for wait in [250, 750] {
+            std::thread::sleep(Duration::from_millis(wait));
+            kwin("/Scripting", "org.kde.kwin.Scripting.unloadScript", &["string:rig-hub-raise"]);
+            let Some(out) = kwin("/Scripting", "org.kde.kwin.Scripting.loadScript", &[&format!("string:{}", script.display()), "string:rig-hub-raise"]) else {
+                return; // no dbus-send
+            };
+            // the reply ends with "int32 <script id>"
+            if let Some(id) = String::from_utf8_lossy(&out.stdout).split_whitespace().last() {
+                kwin(&format!("/Scripting/Script{id}"), "org.kde.kwin.Script.run", &[]);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250)); // let the last run finish before unloading
+        kwin("/Scripting", "org.kde.kwin.Scripting.unloadScript", &["string:rig-hub-raise"]);
+    });
+}
+
 fn load_logo(ctx: &egui::Context) -> TextureHandle {
     ctx.load_texture("logo", egui::ColorImage::from_rgba_unmultiplied([96, 96], &icon_rgba(96)), egui::TextureOptions::LINEAR)
 }
@@ -512,6 +547,8 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                #[cfg(target_os = "linux")]
+                kwin_raise();
             }
         }
 
