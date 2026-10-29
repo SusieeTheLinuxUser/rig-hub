@@ -55,7 +55,12 @@ pub fn parse_headset(json: &str) -> Result<Option<Headset>> {
 }
 
 pub fn headset() -> Result<Option<Headset>> {
-    parse_headset(&run("headsetcontrol", &["-b", "-o", "json"])?)
+    // exits 1 with an empty device list when nothing is plugged in, so skip `run`'s status check
+    let out = Command::new("headsetcontrol")
+        .args(["-b", "-o", "json"])
+        .output()
+        .context("headsetcontrol not found")?;
+    parse_headset(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// `flag` is "-s" (sidetone 0-128) or "-i" (auto-off minutes 0-90).
