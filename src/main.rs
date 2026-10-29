@@ -148,7 +148,7 @@ struct Tray {
 }
 
 impl Tray {
-    fn new(ctx: &egui::Context, tx: Sender<TrayMsg>) -> Option<Self> {
+    fn new(ctx: &workers::Context, tx: Sender<TrayMsg>) -> Option<Self> {
         let info = |t: &str| MenuItem::new(t, false, None);
         let (headset, liquid, dpi) = (info("Headset: …"), info("Liquid: …"), info("Mouse: …"));
         let show = MenuItem::new("Open Rig Hub", true, None);
@@ -345,6 +345,7 @@ enum Page {
 struct App {
     st: Shared,
     w: Workers,
+    repaint: workers::Context,
     page: Page,
     saved: Settings,
     theme: String,
@@ -367,11 +368,13 @@ impl App {
         let settings = Settings::load();
         theme::apply(ctx, &theme::by_name(&settings.theme));
         let st = Arc::new(Mutex::new(State { settings: settings.clone(), ..Default::default() }));
-        let w = workers::spawn(st.clone(), ctx.clone());
+        let repaint = workers::Context::default();
+        repaint.set(ctx);
+        let w = workers::spawn(st.clone(), repaint.clone());
         let (tx, tray_rx) = channel();
         #[cfg(unix)]
         if let Some(l) = instance {
-            let (tx, ctx) = (tx.clone(), ctx.clone());
+            let (tx, ctx) = (tx.clone(), repaint.clone());
             std::thread::spawn(move || {
                 for _ in l.incoming() {
                     let _ = tx.send(TrayMsg::Show);
@@ -379,19 +382,15 @@ impl App {
                 }
             });
         }
-        let logo = ctx.load_texture(
-            "logo",
-            egui::ColorImage::from_rgba_unmultiplied([96, 96], &icon_rgba(96)),
-            egui::TextureOptions::LINEAR,
-        );
         Self {
+            tray: Tray::new(&repaint, tx),
             st,
             w,
+            repaint,
             page,
             theme: settings.theme.clone(),
             saved: settings,
-            logo,
-            tray: Tray::new(ctx, tx),
+            logo: load_logo(ctx),
             tray_rx,
             diagram: None,
             selected: None,
@@ -402,24 +401,80 @@ impl App {
             screenshot: screenshot.map(|p| (p, Instant::now())),
         }
     }
+
+    /// Point at a freshly opened window; its textures and fonts start empty.
+    #[cfg(target_os = "linux")]
+    fn attach(&mut self, ctx: &egui::Context) {
+        setup_fonts(ctx);
+        theme::apply(ctx, &theme::by_name(&self.theme));
+        self.logo = load_logo(ctx);
+        self.diagram = None;
+        self.preview = None;
+        self.repaint.set(ctx);
+    }
+
+    fn closes_to_tray(&self) -> bool {
+        self.st.lock().unwrap().settings.close_to_tray && self.tray.is_some()
+    }
+
+    /// Handles a tray message; true means "show the window".
+    fn on_tray(&self, msg: TrayMsg) -> bool {
+        let t = self.tray.as_ref();
+        let id = match msg {
+            TrayMsg::Show => return true,
+            TrayMsg::Menu(id) => Some(id),
+        };
+        if id.as_ref() == t.map(|t| t.bug.id()) {
+            open_url(&bug_report_url(&self.st.lock().unwrap()));
+        } else if id.as_ref() == t.map(|t| t.quit.id()) {
+            std::process::exit(0);
+        }
+        id.as_ref() == t.map(|t| t.show.id())
+    }
+
+    /// The window is gone; keep the tray menu current until "Open Rig Hub".
+    #[cfg(target_os = "linux")]
+    fn wait_in_tray(&mut self) {
+        self.repaint.set(&egui::Context::default());
+        loop {
+            if let Some(t) = &mut self.tray {
+                t.refresh(&self.st.lock().unwrap());
+            }
+            if let Ok(msg) = self.tray_rx.recv_timeout(Duration::from_secs(1))
+                && self.on_tray(msg)
+            {
+                return;
+            }
+        }
+    }
+}
+
+fn load_logo(ctx: &egui::Context) -> TextureHandle {
+    ctx.load_texture("logo", egui::ColorImage::from_rgba_unmultiplied([96, 96], &icon_rgba(96)), egui::TextureOptions::LINEAR)
+}
+
+/// Lets one App outlive its window: Wayland can't hide a window, so closing to the tray destroys it.
+#[cfg(target_os = "linux")]
+struct Shell(std::rc::Rc<std::cell::RefCell<Option<App>>>);
+
+#[cfg(target_os = "linux")]
+impl eframe::App for Shell {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.0.borrow_mut().as_mut().unwrap().logic(ctx, frame);
+    }
+
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        self.0.borrow_mut().as_mut().unwrap().ui(ui, frame);
+    }
 }
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         while let Ok(msg) = self.tray_rx.try_recv() {
-            let t = self.tray.as_ref();
-            let id = match msg {
-                TrayMsg::Show => None,
-                TrayMsg::Menu(id) => Some(id),
-            };
-            if id.is_none() || id.as_ref() == t.map(|t| t.show.id()) {
+            if self.on_tray(msg) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            } else if id.as_ref() == t.map(|t| t.bug.id()) {
-                open_url(&bug_report_url(&self.st.lock().unwrap()));
-            } else if id.as_ref() == t.map(|t| t.quit.id()) {
-                std::process::exit(0);
             }
         }
 
@@ -427,9 +482,10 @@ impl eframe::App for App {
         if let Some(t) = &mut self.tray {
             t.refresh(&st);
         }
-        let close_to_tray = st.settings.close_to_tray && self.tray.is_some();
         drop(st);
-        if ctx.input(|i| i.viewport().close_requested()) && close_to_tray {
+        // on Linux the window really closes and main() keeps the tray going
+        #[cfg(not(target_os = "linux"))]
+        if ctx.input(|i| i.viewport().close_requested()) && self.closes_to_tray() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
@@ -1180,7 +1236,35 @@ fn main() -> eframe::Result {
             .with_min_inner_size([820.0, 560.0]),
         ..Default::default()
     };
-    eframe::run_native("Rig Hub", options, Box::new(move |cc| Ok(Box::new(App::new(cc, page, screenshot, #[cfg(unix)] instance)))))
+    #[cfg(not(target_os = "linux"))]
+    return eframe::run_native("Rig Hub", options, Box::new(move |cc| Ok(Box::new(App::new(cc, page, screenshot, #[cfg(unix)] instance)))));
+
+    #[cfg(target_os = "linux")]
+    {
+        let app = std::rc::Rc::new(std::cell::RefCell::new(None::<App>));
+        let (mut screenshot, mut instance) = (screenshot, instance);
+        loop {
+            let (a, screenshot, instance) = (app.clone(), screenshot.take(), instance.take());
+            eframe::run_native(
+                "Rig Hub",
+                options.clone(),
+                Box::new(move |cc| {
+                    let mut slot = a.borrow_mut();
+                    match slot.as_mut() {
+                        Some(app) => app.attach(&cc.egui_ctx),
+                        None => *slot = Some(App::new(cc, page, screenshot, instance)),
+                    }
+                    drop(slot);
+                    Ok(Box::new(Shell(a)))
+                }),
+            )?;
+            let mut slot = app.borrow_mut();
+            match slot.as_mut() {
+                Some(app) if app.closes_to_tray() => app.wait_in_tray(),
+                _ => return Ok(()),
+            }
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
