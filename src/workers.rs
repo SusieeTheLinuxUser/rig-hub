@@ -169,9 +169,10 @@ pub enum MouseCmd {
     Activate(zbus::OwnedObjectPath, &'static str),
 }
 
+/// (new, previous): the previous value goes back into settings if the headset rejects the new one.
 pub enum HeadsetCmd {
-    Sidetone(u32),
-    Idle(u32),
+    Sidetone(u32, u32),
+    Idle(u32, u32),
 }
 
 pub struct MicCmd {
@@ -404,12 +405,26 @@ fn headset(st: Shared, ctx: Context, rx: Receiver<HeadsetCmd>) {
         update(&st, &ctx, |s| s.headset = dev);
 
         match rx.recv_timeout(Duration::from_secs(30)) {
-            Ok(HeadsetCmd::Sidetone(v)) => report(&st, &ctx, audio::headset_set("-s", v), "Sidetone set"),
-            Ok(HeadsetCmd::Idle(v)) => report(&st, &ctx, audio::headset_set("-i", v), "Auto-off set"),
+            Ok(HeadsetCmd::Sidetone(v, prev)) => set_or_revert(&st, &ctx, "-s", v, prev, |s| &mut s.sidetone, "Sidetone set"),
+            Ok(HeadsetCmd::Idle(v, prev)) => set_or_revert(&st, &ctx, "-i", v, prev, |s| &mut s.idle_minutes, "Auto-off set"),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
     }
+}
+
+/// The slider already saved `v`; put `prev` back if the headset didn't take it (unless it moved on since).
+fn set_or_revert(st: &Shared, ctx: &Context, flag: &str, v: u32, prev: u32, field: fn(&mut Settings) -> &mut u32, ok: &str) {
+    let r = audio::headset_set(flag, v);
+    if r.is_err() {
+        update(st, ctx, |s| {
+            let f = field(&mut s.settings);
+            if *f == v {
+                *f = prev;
+            }
+        });
+    }
+    report(st, ctx, r, ok);
 }
 
 // -------------------------------------------------------------------- mic
