@@ -772,10 +772,10 @@ fn button_name(model: &str, i: u32) -> String {
     if let Some(n) = COMMON.get(i as usize) {
         return n.to_string();
     }
-    if model.starts_with("usb:046d:c08b") {
-        if let Some(n) = G502.get(i as usize - COMMON.len()) {
-            return n.to_string();
-        }
+    if model.starts_with("usb:046d:c08b")
+        && let Some(n) = G502.get(i as usize - COMMON.len())
+    {
+        return n.to_string();
     }
     format!("Extra button {}", i - 4)
 }

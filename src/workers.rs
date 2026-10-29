@@ -416,10 +416,10 @@ fn mic(st: Shared, ctx: Context, rx: Receiver<MicCmd>) {
         // short poll: the mute button on the mic flips the capture switch
         match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(cmd) => {
-                if let Some(card) = card {
-                    if let Err(e) = audio::mixer_set(&card, cmd.control, cmd.direction, &cmd.value) {
-                        toast(&st, &ctx, format!("Mic: {e:#}"), true);
-                    }
+                if let Some(card) = card
+                    && let Err(e) = audio::mixer_set(&card, cmd.control, cmd.direction, &cmd.value)
+                {
+                    toast(&st, &ctx, format!("Mic: {e:#}"), true);
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}

@@ -23,18 +23,21 @@ pub fn piper_svg(model: &str) -> Option<Vec<u8>> {
             matched = false;
         } else if let Some(m) = line.strip_prefix("DeviceMatch=") {
             matched = m.split(';').any(|m| !m.is_empty() && model.starts_with(m));
-        } else if let Some(s) = line.strip_prefix("Svg=") {
-            if matched {
-                svg = Some(s.trim().to_string());
-            }
+        } else if let Some(s) = line.strip_prefix("Svg=")
+            && matched
+        {
+            svg = Some(s.trim().to_string());
         }
     }
     extract(&svg?)
 }
 
+/// (width, height, highlighted button, color) the cached texture was drawn for.
+type TextureKey = (u32, u32, Option<usize>, Color32);
+
 pub struct Diagram {
     tree: usvg::Tree,
-    texture: Option<(TextureHandle, (u32, u32, Option<usize>, Color32))>,
+    texture: Option<(TextureHandle, TextureKey)>,
 }
 
 /// Room left and right of the mouse for labels.

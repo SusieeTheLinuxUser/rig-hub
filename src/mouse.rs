@@ -304,11 +304,11 @@ impl HidppDpi {
             let Ok(dev) = info.open_device(api) else { continue };
             let mut me = Self { dev, feature: 0 };
             // root feature (index 0) getFeature(0x8100)
-            if let Ok(r) = me.request(0x00, 0, &[0x81, 0x00]) {
-                if r[4] != 0 {
-                    me.feature = r[4];
-                    return Ok(me);
-                }
+            if let Ok(r) = me.request(0x00, 0, &[0x81, 0x00])
+                && r[4] != 0
+            {
+                me.feature = r[4];
+                return Ok(me);
             }
         }
         bail!("mouse has no HID++ onboard-profiles feature")
