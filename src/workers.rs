@@ -293,10 +293,13 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
     let mut last: Option<(u16, u8)> = None; // (profile, stage) as the mouse reports it
     let mut popup: Option<notify_rust::NotificationHandle> = None;
     let mut reload = true;
+    // while missing, look again now and then: ratbagd started later, mouse plugged in or back from an unplug
+    let mut retry_at: Option<Instant> = None;
 
     loop {
-        if reload {
+        if reload || retry_at.is_some_and(|t| Instant::now() >= t) {
             reload = false;
+            retry_at = None;
             match rb.load() {
                 Ok(m) => {
                     if hidpp.is_none() {
@@ -304,7 +307,10 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
                     }
                     update(&st, &ctx, |s| s.mouse = Dev::Ok(m));
                 }
-                Err(e) => missing(format!("{e:#}")),
+                Err(e) => {
+                    missing(format!("{e:#}"));
+                    retry_at = Some(Instant::now() + Duration::from_secs(5));
+                }
             }
         }
 
