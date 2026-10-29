@@ -107,6 +107,8 @@ pub struct State {
     /// live DPI stage from the mouse itself (HID++), if readable
     pub dpi_stage: Option<u8>,
     pub headset: Dev<audio::Headset>,
+    /// everything else with a battery, from UPower
+    pub batteries: Vec<audio::PowerDevice>,
     pub mic: Dev<Mic>,
     pub busy: Option<&'static str>,
     pub toast: Option<Toast>,
@@ -401,7 +403,11 @@ fn headset(st: Shared, ctx: Context, rx: Receiver<HeadsetCmd>) {
                 _ => {}
             }
         }
-        update(&st, &ctx, |s| s.headset = dev);
+        let batteries = audio::batteries();
+        update(&st, &ctx, |s| {
+            s.headset = dev;
+            s.batteries = batteries;
+        });
 
         match rx.recv_timeout(Duration::from_secs(30)) {
             Ok(HeadsetCmd::Sidetone(v)) => report(&st, &ctx, audio::headset_set("-s", v), "Sidetone set"),

@@ -1,0 +1,14 @@
+{
+    "KPlugin": {
+        "Id": "com.susiee.righub",
+        "Name": "Rig Hub",
+        "Description": "Headset and other batteries, cooler temps and mouse DPI from Rig Hub",
+        "Icon": "audio-headset",
+        "Authors": [{ "Name": "Susiee" }],
+        "License": "GPL-3.0-or-later",
+        "Website": "https://github.com/SusieeTheLinuxUser/rig-hub",
+        "Version": "0.1"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

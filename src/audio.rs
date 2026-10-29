@@ -1,4 +1,4 @@
-//! Headset via the `headsetcontrol` CLI, USB mic via `amixer`.
+//! Headset via the `headsetcontrol` CLI, USB mic via `amixer`, other batteries via `upower`.
 
 use anyhow::{Context, Result, bail};
 use std::process::Command;
@@ -70,6 +70,38 @@ pub fn headset_set(flag: &str, value: u32) -> Result<()> {
         bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(())
+}
+
+// -------------------------------------------------------------- batteries
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PowerDevice {
+    pub name: String,
+    pub percent: u8,
+    pub charging: bool,
+}
+
+/// Battery-powered devices UPower knows about (UPS, wireless mice, controllers…) from `upower --dump`.
+pub fn parse_upower(text: &str) -> Vec<PowerDevice> {
+    text.split("\n\n")
+        .filter_map(|block| {
+            let field = |k: &str| block.lines().find_map(|l| l.trim().strip_prefix(k)).map(str::trim);
+            if field("Device:")?.ends_with("DisplayDevice") {
+                return None; // the summary of all batteries, not a device
+            }
+            // "57%" or, in some locales, "57,5%"
+            let percent = field("percentage:")?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+            Some(PowerDevice {
+                name: field("model:").filter(|m| !m.is_empty()).unwrap_or("Battery").to_string(),
+                percent,
+                charging: field("state:") == Some("charging"),
+            })
+        })
+        .collect()
+}
+
+pub fn batteries() -> Vec<PowerDevice> {
+    run("upower", &["--dump"]).map(|t| parse_upower(&t)).unwrap_or_default()
 }
 
 // -------------------------------------------------------------------- mic
@@ -178,6 +210,37 @@ mod tests {
         let off = r#"{"devices":[{"battery":{"status":"BATTERY_UNAVAILABLE"}}]}"#;
         assert_eq!(parse_headset(off).unwrap().unwrap().battery, Battery::Off);
         assert_eq!(parse_headset(r#"{"devices":[]}"#).unwrap(), None);
+    }
+
+    #[test]
+    fn upower() {
+        let dump = "Device: /org/freedesktop/UPower/devices/ups_hiddev1
+  model:                Back-UPS ES 650G2
+  ups
+    state:               fully-charged
+    percentage:          100%
+
+Device: /org/freedesktop/UPower/devices/mouse_hidpp_battery_0
+  model:                G305
+  mouse
+    state:               charging
+    percentage:          57,5%
+
+Device: /org/freedesktop/UPower/devices/line_power_AC
+  line-power
+    online:              yes
+
+Device: /org/freedesktop/UPower/devices/DisplayDevice
+  ups
+    percentage:          100%
+";
+        assert_eq!(
+            parse_upower(dump),
+            [
+                PowerDevice { name: "Back-UPS ES 650G2".into(), percent: 100, charging: false },
+                PowerDevice { name: "G305".into(), percent: 57, charging: true },
+            ]
+        );
     }
 
     #[cfg(unix)]

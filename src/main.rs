@@ -138,9 +138,9 @@ enum TrayMsg {
 
 struct Tray {
     _icon: tray_icon::TrayIcon,
-    headset: MenuItem,
-    liquid: MenuItem,
-    dpi: MenuItem,
+    menu: Menu,
+    /// greyed-out status rows at the top of the menu, one per `status_rows` entry
+    rows: Vec<MenuItem>,
     show: MenuItem,
     bug: MenuItem,
     quit: MenuItem,
@@ -149,20 +149,18 @@ struct Tray {
 
 impl Tray {
     fn new(ctx: &workers::Context, tx: Sender<TrayMsg>) -> Option<Self> {
-        let info = |t: &str| MenuItem::new(t, false, None);
-        let (headset, liquid, dpi) = (info("Headset: …"), info("Liquid: …"), info("Mouse: …"));
         let show = MenuItem::new("Open Rig Hub", true, None);
         let bug = MenuItem::new("Report a bug…", true, None);
         let quit = MenuItem::new("Quit", true, None);
         let menu = Menu::new();
-        menu.append_items(&[&headset, &liquid, &dpi, &PredefinedMenuItem::separator(), &show, &bug, &quit]).ok()?;
+        menu.append_items(&[&PredefinedMenuItem::separator(), &show, &bug, &quit]).ok()?;
         let icon = tray_icon::Icon::from_rgba(icon_rgba(64), 64, 64).ok()?;
         let tray = tray_icon::TrayIconBuilder::new()
             .with_id("rig-hub")
             .with_title("Rig Hub")
             .with_tooltip("Rig Hub")
             .with_icon(icon)
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(menu.clone()))
             .with_menu_on_left_click(false)
             .build()
             .ok()?;
@@ -178,33 +176,72 @@ impl Tray {
                 c.request_repaint();
             }
         }));
-        Some(Self { _icon: tray, headset, liquid, dpi, show, bug, quit, last: String::new() })
+        Some(Self { _icon: tray, menu, rows: Vec::new(), show, bug, quit, last: String::new() })
     }
 
     fn refresh(&mut self, st: &State) {
-        let headset = match st.headset.ok().map(|h| &h.battery) {
-            Some(audio::Battery::Level(p)) => format!("🎧 Headset  {p}%"),
-            Some(audio::Battery::Charging(Some(p))) => format!("🎧 Headset  {p}% ⚡"),
-            Some(audio::Battery::Charging(None)) => "🎧 Headset  charging ⚡".into(),
-            _ => "🎧 Headset  off".into(),
-        };
-        let liquid = match st.cooler.ok().and_then(|c| c.status.as_ref()) {
-            Some(s) => format!("💧 Liquid  {:.1} °C", s.liquid_c),
-            None => "💧 Liquid  –".into(),
-        };
-        let dpi = match current_dpi(st) {
-            Some(d) => format!("🖱 Mouse  {d} DPI"),
-            None => "🖱 Mouse  –".into(),
-        };
-        let all = format!("{headset}\n{liquid}\n{dpi}");
-        if all == self.last {
+        let rows = status_rows(st);
+        let all = rows.iter().map(|(l, v)| format!("{l}  {v}")).collect::<Vec<_>>();
+        let joined = all.join("\n");
+        if joined == self.last {
             return;
         }
-        self.headset.set_text(&headset);
-        self.liquid.set_text(&liquid);
-        self.dpi.set_text(&dpi);
-        let _ = self._icon.set_tooltip(Some(&all));
-        self.last = all;
+        if self.rows.len() != rows.len() {
+            // a battery came or went
+            for item in self.rows.drain(..) {
+                let _ = self.menu.remove(&item);
+            }
+            for i in 0..rows.len() {
+                let item = MenuItem::new("", false, None);
+                let _ = self.menu.insert(&item, i);
+                self.rows.push(item);
+            }
+        }
+        for (item, text) in self.rows.iter().zip(&all) {
+            item.set_text(text);
+        }
+        let _ = self._icon.set_tooltip(Some(&joined));
+        write_status(st, &rows);
+        self.last = joined;
+    }
+}
+
+/// (label, value) for everything worth a glance: the tray menu and the KDE widget both show these.
+fn status_rows(st: &State) -> Vec<(String, String)> {
+    let mut rows = vec![(
+        "🎧 Headset".to_string(),
+        match st.headset.ok().map(|h| &h.battery) {
+            Some(audio::Battery::Level(p)) => format!("{p}%"),
+            Some(audio::Battery::Charging(Some(p))) => format!("{p}% ⚡"),
+            Some(audio::Battery::Charging(None)) => "charging ⚡".into(),
+            _ => "off".into(),
+        },
+    )];
+    for b in &st.batteries {
+        rows.push((format!("🔋 {}", b.name), format!("{}%{}", b.percent, if b.charging { " ⚡" } else { "" })));
+    }
+    let status = st.cooler.ok().and_then(|c| c.status.as_ref());
+    let or_dash = |v: Option<String>| v.unwrap_or_else(|| "–".into());
+    rows.push(("💧 Liquid".into(), or_dash(status.map(|s| format!("{:.1} °C", s.liquid_c)))));
+    rows.push(("🌡 CPU".into(), or_dash(st.cpu_c.map(|c| format!("{c:.0} °C")))));
+    rows.push(("🌀 Pump".into(), or_dash(status.map(|s| format!("{} rpm", s.pump_rpm)))));
+    rows.push(("🌀 Fans".into(), or_dash(status.map(|s| format!("{} rpm", s.fan_rpm)))));
+    rows.push(("🖱 Mouse".into(), or_dash(current_dpi(st).map(|d| format!("{d} DPI")))));
+    rows
+}
+
+/// For the KDE widget (`plasmoid/`), which polls this file while Rig Hub runs.
+fn write_status(st: &State, rows: &[(String, String)]) {
+    let panel = match st.headset.ok().map(|h| &h.battery) {
+        Some(audio::Battery::Level(p) | audio::Battery::Charging(Some(p))) => format!("{p}%"),
+        _ => String::new(),
+    };
+    let json = serde_json::json!({ "panel": panel, "rows": rows });
+    let dir = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir);
+    let tmp = dir.join("rig-hub-status.json.tmp");
+    // write then rename, so the widget never reads half a file
+    if std::fs::write(&tmp, json.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, dir.join("rig-hub-status.json"));
     }
 }
 
