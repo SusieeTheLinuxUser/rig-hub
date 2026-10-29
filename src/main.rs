@@ -1067,8 +1067,7 @@ impl App {
             card(ui, p, "Sidetone", |ui| {
                 ui.label(RichText::new("Hear your own voice in the headset while you talk.").color(p.sub));
                 if let Some(v) = live_slider(ui, "sidetone", s.sidetone, 0..=128, |v| if v == 0 { "off".into() } else { format!("{}%", v * 100 / 128) }) {
-                    s.sidetone = v;
-                    let _ = self.w.headset.send(HeadsetCmd::Sidetone(v));
+                    let _ = self.w.headset.send(HeadsetCmd::Sidetone(v, std::mem::replace(&mut s.sidetone, v)));
                 }
             });
         }
@@ -1076,8 +1075,7 @@ impl App {
             card(ui, p, "Auto power-off", |ui| {
                 ui.label(RichText::new("Turn the headset off after this long without sound.").color(p.sub));
                 if let Some(v) = live_slider(ui, "idle", s.idle_minutes, 0..=90, |v| if v == 0 { "never".into() } else { format!("{v} min") }) {
-                    s.idle_minutes = v;
-                    let _ = self.w.headset.send(HeadsetCmd::Idle(v));
+                    let _ = self.w.headset.send(HeadsetCmd::Idle(v, std::mem::replace(&mut s.idle_minutes, v)));
                 }
             });
         }
