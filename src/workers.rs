@@ -296,7 +296,8 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
     let mut last: Option<(u16, u8)> = None; // (profile, stage) as the mouse reports it
     let mut popup: Option<notify_rust::NotificationHandle> = None;
     let mut reload = true;
-    // while missing, look again now and then: ratbagd started later, mouse plugged in or back from an unplug
+    // look again now and then while missing (ratbagd started later, mouse plugged in or back from an unplug)
+    // or without HID++, whose failing reads are otherwise the only sign of an unplug
     let mut retry_at: Option<Instant> = None;
 
     loop {
@@ -312,10 +313,14 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
                             HidppDpi::open(api, &m.model).ok()
                         });
                     }
+                    if hidpp.is_none() {
+                        retry_at = Some(Instant::now() + Duration::from_secs(30));
+                    }
                     update(&st, &ctx, |s| s.mouse = Dev::Ok(m));
                 }
                 Err(e) => {
                     missing(format!("{e:#}"));
+                    hidpp = None; // ratbagd may pick a different mouse next time
                     last = None;
                     retry_at = Some(Instant::now() + Duration::from_secs(5));
                 }
