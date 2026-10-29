@@ -1,0 +1,5 @@
+# CodeRabbit's sandbox has no libudev, so clippy can't build hidapi there; CI runs clippy instead.
+reviews:
+  tools:
+    clippy:
+      enabled: false

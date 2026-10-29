@@ -82,13 +82,17 @@ fn setup_fonts(ctx: &egui::Context) {
 /// One window only: a second launch pokes the running app to show itself and exits.
 #[cfg(unix)]
 fn single_instance() -> Result<Option<std::os::unix::net::UnixListener>, ()> {
+    lock_socket(&dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("rig-hub.sock"))
+}
+
+#[cfg(unix)]
+fn lock_socket(path: &Path) -> Result<Option<std::os::unix::net::UnixListener>, ()> {
     use std::os::unix::net::{UnixListener, UnixStream};
-    let path = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("rig-hub.sock");
-    if UnixStream::connect(&path).is_ok() {
+    if UnixStream::connect(path).is_ok() {
         return Err(());
     }
-    let _ = std::fs::remove_file(&path); // stale socket left by a crash
-    Ok(UnixListener::bind(&path).ok())
+    let _ = std::fs::remove_file(path); // stale socket left by a crash
+    Ok(UnixListener::bind(path).ok())
 }
 
 fn open_url(url: &str) {
@@ -772,10 +776,10 @@ fn button_name(model: &str, i: u32) -> String {
     if let Some(n) = COMMON.get(i as usize) {
         return n.to_string();
     }
-    if model.starts_with("usb:046d:c08b") {
-        if let Some(n) = G502.get(i as usize - COMMON.len()) {
-            return n.to_string();
-        }
+    if model.starts_with("usb:046d:c08b")
+        && let Some(n) = G502.get(i as usize - COMMON.len())
+    {
+        return n.to_string();
     }
     format!("Extra button {}", i - 4)
 }
@@ -1183,11 +1187,18 @@ fn main() -> eframe::Result {
 mod tests {
     #[test]
     fn second_launch_is_refused() {
-        let first = super::single_instance().expect("no other Rig Hub running during tests");
+        let path = std::env::temp_dir().join(format!("rig-hub-test-{}.sock", std::process::id()));
+        let first = super::lock_socket(&path).unwrap();
         assert!(first.is_some());
-        assert!(super::single_instance().is_err());
+        assert!(super::lock_socket(&path).is_err());
         drop(first);
-        // a dead socket file must not block the next launch
-        assert!(super::single_instance().unwrap().is_some());
+        // a file left by a crash must not block the next launch (a plain file: macOS can still
+        // accept connections on a just-closed listener for a moment, which made this flaky)
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "").unwrap();
+        let next = super::lock_socket(&path).unwrap();
+        assert!(next.is_some());
+        drop(next);
+        let _ = std::fs::remove_file(&path);
     }
 }
