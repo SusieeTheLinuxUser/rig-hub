@@ -30,7 +30,7 @@ irm https://raw.githubusercontent.com/SusieeTheLinuxUser/rig-hub/main/install.ps
 | 🎧 **Headset** | Battery level, sidetone, auto power-off. Low-battery warning. |
 | 🎤 **Mic** | Mute (in sync with the hardware button), gain, monitoring, headphone volume. |
 | 📌 **Tray** | Batteries (headset, plus anything UPower sees: UPS, wireless mice, controllers), temps, pump/fan speeds and current DPI in the tray menu. Closing the window keeps it there. |
-| 🧩 **KDE widget** | The same at a glance in your Plasma panel: add "Rig Hub" from Add Widgets. Rig Hub installs it on KDE and keeps it updated along with the app. Needs Rig Hub running. |
+| 🧩 **KDE widget** | The same at a glance in your Plasma panel: add "Rig Hub" from Add Widgets (Plasma 6). Rig Hub installs it on KDE and keeps it updated along with the app. Needs Rig Hub running. |
 | 🎨 **Themes** | Midnight, Daylight, Catppuccin Mocha, Nord, Dracula, Gruvbox. |
 
 ## Supported hardware

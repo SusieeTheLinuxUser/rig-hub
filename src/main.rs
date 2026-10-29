@@ -201,8 +201,10 @@ impl Tray {
             item.set_text(text);
         }
         let _ = self._icon.set_tooltip(Some(&joined));
-        write_status(st, &rows);
-        self.last = joined;
+        // on a failed write keep `last` stale, so the next refresh tries again
+        if write_status(st, &rows) {
+            self.last = joined;
+        }
     }
 }
 
@@ -218,7 +220,7 @@ fn status_rows(st: &State) -> Vec<(String, String)> {
         },
     )];
     for b in &st.batteries {
-        rows.push((format!("🔋 {}", b.name), format!("{}%{}", b.percent, if b.charging { " ⚡" } else { "" })));
+        rows.push((format!("🔋 {}", b.name), format!("{}{}", b.level, if b.charging { " ⚡" } else { "" })));
     }
     let status = st.cooler.ok().and_then(|c| c.status.as_ref());
     let or_dash = |v: Option<String>| v.unwrap_or_else(|| "–".into());
@@ -230,19 +232,24 @@ fn status_rows(st: &State) -> Vec<(String, String)> {
     rows
 }
 
-/// For the KDE widget (`plasmoid/`), which polls this file while Rig Hub runs.
-fn write_status(st: &State, rows: &[(String, String)]) {
+/// For the KDE widget (`plasmoid/`), which polls this file while Rig Hub runs. The widget reads
+/// `${XDG_RUNTIME_DIR:-/tmp}`, so fall back to /tmp here too rather than `$TMPDIR`.
+fn status_path() -> PathBuf {
+    dirs::runtime_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join("rig-hub-status.json")
+}
+
+fn write_status(st: &State, rows: &[(String, String)]) -> bool {
     let panel = match st.headset.ok().map(|h| &h.battery) {
         Some(audio::Battery::Level(p) | audio::Battery::Charging(Some(p))) => format!("{p}%"),
         _ => String::new(),
     };
-    let json = serde_json::json!({ "panel": panel, "rows": rows });
-    let dir = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir);
-    let tmp = dir.join("rig-hub-status.json.tmp");
-    // write then rename, so the widget never reads half a file
-    if std::fs::write(&tmp, json.to_string()).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join("rig-hub-status.json"));
-    }
+    write_atomic(&status_path(), &serde_json::json!({ "panel": panel, "rows": rows }).to_string())
+}
+
+/// Write then rename, so readers (the widget, Plasma) never see half a file.
+fn write_atomic(path: &Path, body: &str) -> bool {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, path).is_ok()
 }
 
 #[cfg(target_os = "linux")]
@@ -491,7 +498,18 @@ impl App {
 /// KWin to do it with a one-off script. Off KDE the D-Bus calls fail and nothing happens.
 #[cfg(target_os = "linux")]
 fn kwin_raise() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // both raisers would register the same script name, and KWin refuses the second
+    static RAISING: AtomicBool = AtomicBool::new(false);
+    if RAISING.swap(true, Ordering::SeqCst) {
+        return;
+    }
     std::thread::spawn(|| {
+        raise();
+        RAISING.store(false, Ordering::SeqCst);
+    });
+
+    fn raise() {
         let script = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("rig-hub-raise.js");
         let js = r#"for (const w of workspace.windowList()) if (w.resourceClass === "rig-hub") { w.minimized = false; workspace.activeWindow = w; }"#;
         if std::fs::write(&script, js).is_err() {
@@ -518,7 +536,7 @@ fn kwin_raise() {
         }
         std::thread::sleep(Duration::from_millis(250)); // let the last run finish before unloading
         kwin("/Scripting", "org.kde.kwin.Scripting.unloadScript", &["string:rig-hub-raise"]);
-    });
+    }
 }
 
 /// The KDE widget (`plasmoid/`) ships inside the binary, so updating Rig Hub updates the widget too.
@@ -536,7 +554,7 @@ fn install_widget() {
         let path = dir.join(file);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(body) {
             let _ = path.parent().map(std::fs::create_dir_all);
-            let _ = std::fs::write(&path, body);
+            write_atomic(&path, body);
         }
     }
 }
@@ -1320,6 +1338,8 @@ fn main() -> eframe::Result {
             Err(()) => return Ok(()),
         },
     };
+    // numbers from a previous run would look live until our first refresh
+    let _ = std::fs::remove_file(status_path());
     #[cfg(target_os = "linux")]
     install_widget();
     let icon = egui::IconData { rgba: icon_rgba(128), width: 128, height: 128 };

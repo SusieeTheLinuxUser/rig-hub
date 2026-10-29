@@ -77,7 +77,8 @@ pub fn headset_set(flag: &str, value: u32) -> Result<()> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PowerDevice {
     pub name: String,
-    pub percent: u8,
+    /// "57%", or a coarse level like "low" for devices that only report one
+    pub level: String,
     pub charging: bool,
 }
 
@@ -86,14 +87,21 @@ pub fn parse_upower(text: &str) -> Vec<PowerDevice> {
     text.split("\n\n")
         .filter_map(|block| {
             let field = |k: &str| block.lines().find_map(|l| l.trim().strip_prefix(k)).map(str::trim);
-            if field("Device:")?.ends_with("DisplayDevice") {
+            let path = field("Device:")?;
+            if path.ends_with("DisplayDevice") {
                 return None; // the summary of all batteries, not a device
             }
             // "57%" or, in some locales, "57,5%"
-            let percent = field("percentage:")?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+            let percent: u8 = field("percentage:")?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+            // with a coarse battery-level, UPower's percentage is only a guess
+            let level = match field("battery-level:") {
+                Some(l) if !matches!(l, "none" | "unknown") => l.to_string(),
+                _ => format!("{percent}%"),
+            };
             Some(PowerDevice {
-                name: field("model:").filter(|m| !m.is_empty()).unwrap_or("Battery").to_string(),
-                percent,
+                // no model: the object name (e.g. "mouse_hidpp_battery_0") at least tells two apart
+                name: field("model:").filter(|m| !m.is_empty()).unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path)).to_string(),
+                level,
                 charging: field("state:") == Some("charging"),
             })
         })
@@ -226,6 +234,12 @@ Device: /org/freedesktop/UPower/devices/mouse_hidpp_battery_0
     state:               charging
     percentage:          57,5%
 
+Device: /org/freedesktop/UPower/devices/gaming_input_0
+  gaming-input
+    state:               discharging
+    percentage:          55%
+    battery-level:       low
+
 Device: /org/freedesktop/UPower/devices/line_power_AC
   line-power
     online:              yes
@@ -237,8 +251,9 @@ Device: /org/freedesktop/UPower/devices/DisplayDevice
         assert_eq!(
             parse_upower(dump),
             [
-                PowerDevice { name: "Back-UPS ES 650G2".into(), percent: 100, charging: false },
-                PowerDevice { name: "G305".into(), percent: 57, charging: true },
+                PowerDevice { name: "Back-UPS ES 650G2".into(), level: "100%".into(), charging: false },
+                PowerDevice { name: "G305".into(), level: "57%".into(), charging: true },
+                PowerDevice { name: "gaming_input_0".into(), level: "low".into(), charging: false },
             ]
         );
     }
