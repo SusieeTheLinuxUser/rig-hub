@@ -8,6 +8,9 @@ fn run(cmd: &str, args: &[&str]) -> Result<String> {
         .args(args)
         .output()
         .with_context(|| format!("{cmd} not found"))?;
+    if !out.status.success() {
+        bail!("{cmd}: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -52,7 +55,12 @@ pub fn parse_headset(json: &str) -> Result<Option<Headset>> {
 }
 
 pub fn headset() -> Result<Option<Headset>> {
-    parse_headset(&run("headsetcontrol", &["-b", "-o", "json"])?)
+    // exits 1 with an empty device list when nothing is plugged in, so skip `run`'s status check
+    let out = Command::new("headsetcontrol")
+        .args(["-b", "-o", "json"])
+        .output()
+        .context("headsetcontrol not found")?;
+    parse_headset(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// `flag` is "-s" (sidetone 0-128) or "-i" (auto-off minutes 0-90).
@@ -170,5 +178,11 @@ mod tests {
         let off = r#"{"devices":[{"battery":{"status":"BATTERY_UNAVAILABLE"}}]}"#;
         assert_eq!(parse_headset(off).unwrap().unwrap().battery, Battery::Off);
         assert_eq!(parse_headset(r#"{"devices":[]}"#).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_command_is_an_error() {
+        assert!(run("sh", &["-c", "exit 1"]).is_err());
     }
 }
