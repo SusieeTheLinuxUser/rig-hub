@@ -232,10 +232,15 @@ fn status_rows(st: &State) -> Vec<(String, String)> {
     rows
 }
 
-/// For the KDE widget (`plasmoid/`), which polls this file while Rig Hub runs. The widget reads
-/// `${XDG_RUNTIME_DIR:-/tmp}`, so fall back to /tmp here too rather than `$TMPDIR`.
+/// Somewhere only this user can write: never a shared /tmp, where another user could plant files.
+fn private_dir() -> PathBuf {
+    dirs::runtime_dir().or_else(dirs::cache_dir).unwrap_or_else(std::env::temp_dir)
+}
+
+/// For the KDE widget (`plasmoid/`), which polls this file while Rig Hub runs. The widget looks in
+/// the same place: `${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}`.
 fn status_path() -> PathBuf {
-    dirs::runtime_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join("rig-hub-status.json")
+    private_dir().join("rig-hub-status.json")
 }
 
 fn write_status(st: &State, rows: &[(String, String)]) -> bool {
@@ -427,7 +432,8 @@ impl App {
             });
         }
         Self {
-            tray: Tray::new(&repaint, tx),
+            // test runs stay out of the tray and the widget's status file
+            tray: screenshot.is_none().then(|| Tray::new(&repaint, tx)).flatten(),
             st,
             w,
             repaint,
@@ -510,9 +516,19 @@ fn kwin_raise() {
     });
 
     fn raise() {
-        let script = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("rig-hub-raise.js");
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let script = private_dir().join("rig-hub-raise.js");
         let js = r#"for (const w of workspace.windowList()) if (w.resourceClass === "rig-hub") { w.minimized = false; workspace.activeWindow = w; }"#;
-        if std::fs::write(&script, js).is_err() {
+        // KWin runs whatever is in this file, so nobody else may be able to write it
+        let _ = std::fs::remove_file(&script);
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&script)
+            .and_then(|mut f| f.write_all(js.as_bytes()));
+        if written.is_err() {
             return;
         }
         let kwin = |path: &str, method: &str, args: &[&str]| {
@@ -1339,7 +1355,9 @@ fn main() -> eframe::Result {
         },
     };
     // numbers from a previous run would look live until our first refresh
-    let _ = std::fs::remove_file(status_path());
+    if screenshot.is_none() {
+        let _ = std::fs::remove_file(status_path());
+    }
     #[cfg(target_os = "linux")]
     install_widget();
     let icon = egui::IconData { rgba: icon_rgba(128), width: 128, height: 128 };

@@ -10,7 +10,7 @@ PlasmoidItem {
     // { panel: "85%", rows: [[label, value], …] } written by Rig Hub; null while it isn't running
     property var status: null
     // pgrep first: the file outlives Rig Hub, and stale numbers would look live
-    readonly property string poll: `pgrep -x rig-hub >/dev/null && cat "\${XDG_RUNTIME_DIR:-/tmp}/rig-hub-status.json"`
+    readonly property string poll: `pgrep -x rig-hub >/dev/null && cat "\${XDG_RUNTIME_DIR:-\${XDG_CACHE_HOME:-$HOME/.cache}}/rig-hub-status.json"`
     // a second launch just brings the running one to the front
     readonly property string open: `PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" setsid -f rig-hub`
 
