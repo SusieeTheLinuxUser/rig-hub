@@ -280,7 +280,10 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
 fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
     use crate::mouse::{HidppDpi, Ratbag};
 
-    let missing = |msg: String| update(&st, &ctx, |s| s.mouse = Dev::Missing(msg));
+    let missing = |msg: String| update(&st, &ctx, |s| {
+        s.mouse = Dev::Missing(msg);
+        s.dpi_stage = None; // the next mouse may not report one
+    });
     let rb = loop {
         match Ratbag::connect() {
             Ok(rb) => break rb,
@@ -288,23 +291,39 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
         }
         std::thread::sleep(Duration::from_secs(10));
     };
-    let api = hidapi::HidApi::new().ok();
+    let mut api = hidapi::HidApi::new().ok();
     let mut hidpp: Option<HidppDpi> = None;
     let mut last: Option<(u16, u8)> = None; // (profile, stage) as the mouse reports it
     let mut popup: Option<notify_rust::NotificationHandle> = None;
     let mut reload = true;
+    // look again now and then while missing (ratbagd started later, mouse plugged in or back from an unplug)
+    // or without HID++, whose failing reads are otherwise the only sign of an unplug
+    let mut retry_at: Option<Instant> = None;
 
     loop {
-        if reload {
+        if reload || retry_at.is_some_and(|t| Instant::now() >= t) {
             reload = false;
+            retry_at = None;
             match rb.load() {
                 Ok(m) => {
                     if hidpp.is_none() {
-                        hidpp = api.as_ref().and_then(|api| HidppDpi::open(api, &m.model).ok());
+                        // the device list is a snapshot: a mouse plugged in since isn't on it
+                        hidpp = api.as_mut().and_then(|api| {
+                            let _ = api.refresh_devices();
+                            HidppDpi::open(api, &m.model).ok()
+                        });
+                    }
+                    if hidpp.is_none() {
+                        retry_at = Some(Instant::now() + Duration::from_secs(30));
                     }
                     update(&st, &ctx, |s| s.mouse = Dev::Ok(m));
                 }
-                Err(e) => missing(format!("{e:#}")),
+                Err(e) => {
+                    missing(format!("{e:#}"));
+                    hidpp = None; // ratbagd may pick a different mouse next time
+                    last = None;
+                    retry_at = Some(Instant::now() + Duration::from_secs(5));
+                }
             }
         }
 
