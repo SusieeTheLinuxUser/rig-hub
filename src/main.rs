@@ -235,13 +235,22 @@ fn status_rows(st: &State) -> Vec<(String, String)> {
 /// Somewhere only this user can write, never a shared /tmp where another user could plant files
 /// or symlinks. None if there's no such place: the status file and window raising are skipped.
 fn private_dir() -> Option<PathBuf> {
-    let dir = dirs::runtime_dir().or_else(dirs::cache_dir)?;
+    if let Some(dir) = dirs::runtime_dir() {
+        return Some(dir); // the system makes it owner-only
+    }
+    // ~/.cache can be group-writable under a loose umask, so use our own owner-only folder in it
+    let dir = dirs::cache_dir()?.join("rig-hub");
     std::fs::create_dir_all(&dir).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+    }
     Some(dir)
 }
 
 /// For the KDE widget (`plasmoid/`), which polls this file while Rig Hub runs. The widget looks in
-/// the same place: `${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}`.
+/// the same place: `${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/rig-hub}`.
 fn status_path() -> Option<PathBuf> {
     Some(private_dir()?.join("rig-hub-status.json"))
 }
@@ -251,8 +260,8 @@ fn write_status(st: &State, rows: &[(String, String)]) -> bool {
         Some(audio::Battery::Level(p) | audio::Battery::Charging(Some(p))) => format!("{p}%"),
         _ => String::new(),
     };
-    // nowhere to write: nothing to retry either
-    let Some(path) = status_path() else { return true };
+    // nowhere to write yet: false, so the next refresh tries again
+    let Some(path) = status_path() else { return false };
     write_atomic(&path, &serde_json::json!({ "panel": panel, "rows": rows }).to_string())
 }
 
