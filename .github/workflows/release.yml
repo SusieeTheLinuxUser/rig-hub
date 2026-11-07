@@ -21,6 +21,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # the build reports Cargo.toml's version; a stale one makes the app say its own release "is out"
+      - name: tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: test "${GITHUB_REF_NAME#v}" = "$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
