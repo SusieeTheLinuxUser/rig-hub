@@ -264,7 +264,7 @@ fn memory_offset(buckets: &[[u8; REPORT]], index: usize, pages: usize) -> Option
             overlap = true;
         }
     }
-    if !overlap {
+    if !overlap && cur_off + pages <= LCD_TOTAL_MEMORY {
         return Some([cur[17], cur[18]]);
     }
     if max_used + pages < LCD_TOTAL_MEMORY {
@@ -321,5 +321,13 @@ mod tests {
         // memory full: None (caller wipes all buckets)
         b[4] = bucket(7000, 17000);
         assert_eq!(memory_offset(&b, 2, 3000), None);
+        // a bucket below that ends before ours is not an overlap: reuse the slot
+        let mut c = empty.clone();
+        c[0] = bucket(0, 1000);
+        c[2] = bucket(5000, 100);
+        assert_eq!(memory_offset(&c, 2, 1600), Some(5000u16.to_le_bytes()));
+        // ...unless the upload would run past the end of LCD memory
+        c[2] = bucket(24000, 100);
+        assert_eq!(memory_offset(&c, 2, 400), None);
     }
 }
