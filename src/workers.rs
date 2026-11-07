@@ -112,6 +112,8 @@ pub struct State {
     pub mic: Dev<Mic>,
     pub busy: Option<&'static str>,
     pub toast: Option<Toast>,
+    /// newest release tag, when GitHub has one this build doesn't (checked once at startup)
+    pub update: Option<String>,
 }
 
 pub type Shared = Arc<Mutex<State>>;
@@ -199,12 +201,41 @@ pub fn spawn(st: Shared, ctx: Context) -> Workers {
         std::thread::Builder::new().name(name.into()).spawn(move || f(st, ctx, rx)).unwrap();
         tx
     }
+    let cooler = go("cooler", &st, &ctx, cooler);
+    #[cfg(target_os = "linux")]
+    let mouse = go("mouse", &st, &ctx, mouse);
+    let headset = go("headset", &st, &ctx, headset);
+    let mic = go("mic", &st, &ctx, mic);
+    // one shot at startup; silent on any failure (curl missing, offline, odd output)
+    {
+        let (st, ctx) = (st.clone(), ctx.clone());
+        let _ = std::thread::Builder::new().name("update".into()).spawn(move || check_update(st, ctx));
+    }
     Workers {
-        cooler: go("cooler", &st, &ctx, cooler),
+        cooler,
         #[cfg(target_os = "linux")]
-        mouse: go("mouse", &st, &ctx, mouse),
-        headset: go("headset", &st, &ctx, headset),
-        mic: go("mic", &st, &ctx, mic),
+        mouse,
+        headset,
+        mic,
+    }
+}
+
+/// Ask GitHub where /releases/latest redirects and compare that tag with this build. No HTTP
+/// client here: curl ships with Linux and Windows 10+. Not the API — it allows 60 req/hour.
+fn check_update(st: Shared, ctx: Context) {
+    let mut curl = std::process::Command::new("curl");
+    curl.args(["-sSI", "--max-time", "10"]).arg(format!("{}/releases/latest", crate::REPO));
+    // Rig Hub has no console on Windows, so a console child would flash a black window.
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut curl, 0x0800_0000); // CREATE_NO_WINDOW
+    let Ok(out) = curl.output() else {
+        return;
+    };
+    let headers = String::from_utf8_lossy(&out.stdout);
+    let Some(tag) = crate::latest_tag(&headers) else { return };
+    if crate::is_newer(tag, env!("CARGO_PKG_VERSION")) {
+        let tag = tag.to_string();
+        update(&st, &ctx, |s| s.update = Some(tag));
     }
 }
 

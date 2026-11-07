@@ -99,6 +99,57 @@ fn open_url(url: &str) {
     let _ = webbrowser::open(url);
 }
 
+// ------------------------------------------------------------- update check
+
+/// (major, minor, patch, (pre-release kind, number)); a release is kind 3, above alpha/beta/rc.
+type Ver = (u32, u32, u32, (u8, u32));
+
+fn ver(v: &str) -> Option<Ver> {
+    let (core, pre) = match v.split_once('-') {
+        Some((c, p)) => (c, Some(p)),
+        None => (v, None),
+    };
+    let mut n = core.split('.');
+    let mut num = || n.next()?.parse().ok();
+    let nums = (num()?, num()?, num()?);
+    if n.next().is_some() {
+        return None; // 1.2.3.4 isn't a version we ship
+    }
+    let (name, n) = match pre {
+        Some(p) => p.split_once('.').unwrap_or((p, "0")),
+        None => return Some((nums.0, nums.1, nums.2, (3, 0))),
+    };
+    let kind = match name {
+        "alpha" => 0,
+        "beta" => 1,
+        "rc" => 2,
+        _ => return None,
+    };
+    Some((nums.0, nums.1, nums.2, (kind, n.parse().ok()?)))
+}
+
+/// True only when `latest` really is ahead: garbage on either side means no update.
+fn is_newer(latest: &str, current: &str) -> bool {
+    match (ver(latest), ver(current)) {
+        (Some(l), Some(c)) => l > c,
+        _ => false,
+    }
+}
+
+/// The tag out of curl -I's `location:` header, without the leading "v".
+fn latest_tag(headers: &str) -> Option<&str> {
+    let url = headers
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().get(..9).is_some_and(|p| p.eq_ignore_ascii_case("location:")))?
+        .split_once(':')?
+        .1
+        .trim();
+    let tag = url.split("/tag/").nth(1)?.split('/').next()?;
+    let tag = tag.strip_prefix('v').unwrap_or(tag);
+    ver(tag).is_some().then_some(tag)
+}
+
 fn bug_report_url(st: &State) -> String {
     fn line<T>(d: &Dev<T>, name: impl Fn(&T) -> String) -> String {
         match d {
@@ -763,6 +814,11 @@ impl App {
             if ui.add(egui::Button::new("🐞  Report a bug").min_size(vec2(ui.available_width(), 34.0))).clicked() {
                 open_url(&bug_report_url(st));
             }
+            if let Some(latest) = &st.update
+                && ui.small_button(format!("⬆  Rig Hub {latest} is out")).on_hover_text("Opens the release page").clicked()
+            {
+                open_url(&format!("{REPO}/releases/latest"));
+            }
             if let Some(h) = st.headset.ok() {
                 let text = match h.battery {
                     audio::Battery::Level(n) => format!("🎧 {n}%"),
@@ -1410,6 +1466,48 @@ fn main() -> eframe::Result {
                 _ => return Ok(()),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::{is_newer, latest_tag};
+
+    #[test]
+    fn newer_same_older() {
+        assert!(is_newer("0.1.1", "0.1.0"));
+        assert!(!is_newer("0.1.0", "0.1.0")); // same: no update
+        assert!(!is_newer("0.1.0", "0.1.1")); // older
+        assert!(is_newer("0.2.0", "0.1.9"));
+        assert!(is_newer("1.0.0", "0.9.9"));
+    }
+
+    #[test]
+    fn pre_releases_compare_numerically_and_below_their_release() {
+        assert!(is_newer("0.1.0-alpha.10", "0.1.0-alpha.3")); // numeric, not "10" < "3"
+        assert!(!is_newer("0.1.0-alpha.3", "0.1.0-alpha.10"));
+        assert!(is_newer("0.1.0-beta.1", "0.1.0-alpha.10"));
+        assert!(is_newer("0.1.0", "0.1.0-beta.1"));
+        assert!(is_newer("0.1.0", "0.1.0-alpha.3"));
+        assert!(is_newer("0.1.1-alpha.1", "0.1.0")); // newer core beats older pre-release
+    }
+
+    #[test]
+    fn garbage_means_no_update() {
+        assert!(!is_newer("", "0.1.0"));
+        assert!(!is_newer("banana", "0.1.0"));
+        assert!(!is_newer("0.1", "0.1.0"));
+        assert!(!is_newer("0.1.0-omega.5", "0.1.0-alpha.3")); // unknown pre-release kind
+        assert!(!is_newer("0.1.0", "banana")); // garbage current version: no update either
+    }
+
+    #[test]
+    fn parses_tag_from_curl_headers() {
+        let ok = "HTTP/2 302\r\ncontent-length: 0\r\nlocation: https://github.com/SusieeTheLinuxUser/rig-hub/releases/tag/v0.1.0-alpha.4\r\n\r\n";
+        assert_eq!(latest_tag(ok), Some("0.1.0-alpha.4"));
+        assert_eq!(latest_tag(""), None); // empty output (offline, curl missing)
+        assert_eq!(latest_tag("HTTP/2 404\r\ncontent-length: 0\r\n\r\n"), None);
+        assert_eq!(latest_tag("location: https://github.com/x/y/releases/tag/banana\r\n"), None);
     }
 }
 
