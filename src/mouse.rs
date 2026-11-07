@@ -71,7 +71,7 @@ impl Action {
             v.extend((1..=11).map(Action::Button));
         }
         if types.contains(&SPECIAL) {
-            v.extend((1..SPECIALS.len() as u32 - 1).map(|n| Action::Special(SPECIAL_BASE + n)));
+            v.extend((1..SPECIALS.len() as u32).map(|n| Action::Special(SPECIAL_BASE + n)));
         }
         if types.contains(&NONE) {
             v.push(Action::None);
@@ -347,5 +347,18 @@ impl HidppDpi {
     pub fn profile(&self) -> Result<u16> {
         let r = self.request(self.feature, 0x04, &[])?;
         Ok(u16::from_be_bytes([r[4], r[5]]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn special_choices_cover_every_entry() {
+        let choices = Action::choices(&[SPECIAL]);
+        // index 0 ("Unknown") stays out, the last entry ("Battery level") is offered
+        assert!(!choices.contains(&Action::Special(SPECIAL_BASE)));
+        assert!(choices.contains(&Action::Special(SPECIAL_BASE + SPECIALS.len() as u32 - 1)));
     }
 }
