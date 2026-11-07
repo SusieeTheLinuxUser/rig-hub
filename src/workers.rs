@@ -57,6 +57,8 @@ impl Settings {
         let _ = std::fs::create_dir_all(p.parent().unwrap());
         // Atomic: a crash mid-write would otherwise leave a file `load` can't parse, and every
         // setting would silently reset to its default.
+        // rename() would replace a symlinked settings.json (dotfiles) instead of its target.
+        let p = std::fs::canonicalize(&p).unwrap_or(p);
         let _ = crate::write_atomic(&p, &serde_json::to_string_pretty(self).unwrap());
     }
 }
