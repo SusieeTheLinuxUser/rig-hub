@@ -59,7 +59,7 @@ impl Settings {
         // setting would silently reset to its default.
         // rename() would replace a symlinked settings.json (dotfiles) instead of its target.
         let p = std::fs::canonicalize(&p).unwrap_or(p);
-        let _ = crate::write_atomic(&p, &serde_json::to_string_pretty(self).unwrap());
+        let _ = crate::write_atomic(&p, &serde_json::to_string_pretty(self).unwrap(), true);
     }
 }
 
