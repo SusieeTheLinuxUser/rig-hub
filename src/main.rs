@@ -313,13 +313,20 @@ fn write_status(st: &State, rows: &[(String, String)]) -> bool {
     };
     // nowhere to write yet: false, so the next refresh tries again
     let Some(path) = status_path() else { return false };
-    write_atomic(&path, &serde_json::json!({ "panel": panel, "rows": rows }).to_string())
+    write_atomic(&path, &serde_json::json!({ "panel": panel, "rows": rows }).to_string(), false)
 }
 
-/// Write then rename, so readers (the widget, Plasma) never see half a file.
-fn write_atomic(path: &Path, body: &str) -> bool {
+/// Write then rename, so readers (the widget, Plasma) never see half a file. `durable`
+/// syncs first, so a power cut can't leave the renamed file empty: for settings, not for the
+/// status file, which is rewritten constantly (under the State lock) and regenerated anyway.
+pub(crate) fn write_atomic(path: &Path, body: &str, durable: bool) -> bool {
+    use std::io::Write;
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, path).is_ok()
+    let written = std::fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(body.as_bytes())?;
+        if durable { f.sync_all() } else { Ok(()) }
+    });
+    written.is_ok() && std::fs::rename(&tmp, path).is_ok()
 }
 
 #[cfg(target_os = "linux")]
@@ -635,7 +642,7 @@ fn install_widget() {
         let path = dir.join(file);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(body) {
             let _ = path.parent().map(std::fs::create_dir_all);
-            write_atomic(&path, body);
+            write_atomic(&path, body, false);
         }
     }
 }
@@ -733,9 +740,12 @@ impl eframe::App for App {
 
         toasts(&ctx, &p, &mut st);
 
-        if st.settings != self.saved {
-            st.settings.save();
-            self.saved = st.settings.clone();
+        // Saved after the State lock is released: the durable save waits on the disk.
+        let pending = (st.settings != self.saved).then(|| st.settings.clone());
+        drop(st);
+        if let Some(settings) = pending {
+            settings.save();
+            self.saved = settings;
         }
     }
 }
