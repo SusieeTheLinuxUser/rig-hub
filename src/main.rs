@@ -740,9 +740,12 @@ impl eframe::App for App {
 
         toasts(&ctx, &p, &mut st);
 
-        if st.settings != self.saved {
-            st.settings.save();
-            self.saved = st.settings.clone();
+        // Saved after the State lock is released: the durable save waits on the disk.
+        let pending = (st.settings != self.saved).then(|| st.settings.clone());
+        drop(st);
+        if let Some(settings) = pending {
+            settings.save();
+            self.saved = settings;
         }
     }
 }
