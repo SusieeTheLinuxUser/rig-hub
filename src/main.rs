@@ -317,7 +317,7 @@ fn write_status(st: &State, rows: &[(String, String)]) -> bool {
 }
 
 /// Write then rename, so readers (the widget, Plasma) never see half a file.
-fn write_atomic(path: &Path, body: &str) -> bool {
+pub(crate) fn write_atomic(path: &Path, body: &str) -> bool {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, path).is_ok()
 }

@@ -55,7 +55,9 @@ impl Settings {
     pub fn save(&self) {
         let Some(p) = settings_path() else { return };
         let _ = std::fs::create_dir_all(p.parent().unwrap());
-        let _ = std::fs::write(p, serde_json::to_string_pretty(self).unwrap());
+        // Atomic: a crash mid-write would otherwise leave a file `load` can't parse, and every
+        // setting would silently reset to its default.
+        let _ = crate::write_atomic(&p, &serde_json::to_string_pretty(self).unwrap());
     }
 }
 

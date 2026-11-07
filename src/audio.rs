@@ -3,8 +3,18 @@
 use anyhow::{Context, Result, bail};
 use std::process::Command;
 
+/// Rig Hub has no console on Windows, so a console child would flash a black window
+/// (headsetcontrol is polled every 30 s).
+fn command(cmd: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut c = Command::new(cmd);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000); // CREATE_NO_WINDOW
+    c
+}
+
 fn run(cmd: &str, args: &[&str]) -> Result<String> {
-    let out = Command::new(cmd)
+    let out = command(cmd)
         .args(args)
         .output()
         .with_context(|| format!("{cmd} not found"))?;
@@ -56,7 +66,7 @@ pub fn parse_headset(json: &str) -> Result<Option<Headset>> {
 
 pub fn headset() -> Result<Option<Headset>> {
     // exits 1 with an empty device list when nothing is plugged in, so skip `run`'s status check
-    let out = Command::new("headsetcontrol")
+    let out = command("headsetcontrol")
         .args(["-b", "-o", "json"])
         .output()
         .context("headsetcontrol not found")?;
@@ -65,7 +75,7 @@ pub fn headset() -> Result<Option<Headset>> {
 
 /// `flag` is "-s" (sidetone 0-128) or "-i" (auto-off minutes 0-90).
 pub fn headset_set(flag: &str, value: u32) -> Result<()> {
-    let out = Command::new("headsetcontrol").args([flag, &value.to_string()]).output()?;
+    let out = command("headsetcontrol").args([flag, &value.to_string()]).output()?;
     if !out.status.success() {
         bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
     }
