@@ -121,12 +121,14 @@ impl Kraken {
         use image::AnimationDecoder;
         use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
         let file = std::io::BufReader::new(std::fs::File::open(path)?);
-        let frames = GifDecoder::new(file)?.into_frames().collect_frames()?;
+        // Decode one frame at a time so a huge GIF can't be pulled into RAM whole.
+        let frames = GifDecoder::new(file)?.into_frames();
         let mut out = Vec::new();
         {
             let mut enc = GifEncoder::new_with_speed(&mut out, 10);
             enc.set_repeat(Repeat::Infinite)?;
             for f in frames {
+                let f = f?;
                 let delay = f.delay();
                 let img = self.prepare(f.into_buffer(), angle);
                 enc.encode_frame(image::Frame::from_parts(img, 0, 0, delay))?;
@@ -256,7 +258,7 @@ fn memory_offset(buckets: &[[u8; REPORT]], index: usize, pages: usize) -> Option
         max_used = max_used.max(end);
         min_used = min_used.min(start);
         if (start > cur_off && start < cur_off + pages)
-            || (start < cur_off && end > start)
+            || (start < cur_off && end > cur_off)
             || (start == cur_off && i != index)
         {
             overlap = true;
@@ -277,7 +279,10 @@ fn memory_offset(buckets: &[[u8; REPORT]], index: usize, pages: usize) -> Option
 /// Liquid/pump/fan from the nzxt-kraken3 kernel driver (no USB traffic).
 #[cfg(target_os = "linux")]
 pub fn status() -> Result<Status> {
-    let dir = crate::hwmon("kraken").context("nzxt-kraken3 kernel driver not loaded")?;
+    let dir = crate::hwmon("kraken")
+        .or_else(|| crate::hwmon("z53"))
+        .or_else(|| crate::hwmon("x53"))
+        .context("nzxt-kraken3 kernel driver not loaded")?;
     let read = |f: &str| -> f32 {
         std::fs::read_to_string(dir.join(f)).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0)
     };
