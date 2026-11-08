@@ -154,7 +154,7 @@ fn bug_report_url(st: &State) -> String {
     fn line<T>(d: &Dev<T>, name: impl Fn(&T) -> String) -> String {
         match d {
             Dev::Ok(t) => name(t),
-            Dev::Missing(why) => format!("not found ({why})"),
+            Dev::Missing(why) => format!("unavailable ({why})"),
             Dev::Loading => "loading".into(),
         }
     }
@@ -848,7 +848,7 @@ impl App {
             Dev::Loading => return loading(ui, p),
             Dev::Missing(why) => {
                 header(ui, p, "Cooler", "");
-                return missing(ui, p, "No cooler found", why, &[]);
+                return missing(ui, p, "Cooler unavailable", why, &[]);
             }
         };
         header(ui, p, "Cooler", c.name);
