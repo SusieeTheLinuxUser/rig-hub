@@ -45,7 +45,9 @@ pub struct Kraken {
 }
 
 impl Kraken {
-    pub fn open(api: &HidApi) -> Result<Self> {
+    /// Ok(None): no supported Kraken plugged in. Err: one is there but can't be opened
+    /// (on Linux usually no permission: hidraw is root-only without a udev rule).
+    pub fn open(api: &HidApi) -> Result<Option<Self>> {
         for info in api.device_list() {
             if info.vendor_id() != VID {
                 continue;
@@ -53,11 +55,11 @@ impl Kraken {
             if let Some(&(pid, name, side, chunk)) =
                 MODELS.iter().find(|m| m.0 == info.product_id())
             {
-                let hid = info.open_device(api).context("open Kraken HID")?;
-                return Ok(Self { name, side, chunk, hid, pid });
+                let hid = info.open_device(api).with_context(|| format!("found {name} but can't open it"))?;
+                return Ok(Some(Self { name, side, chunk, hid, pid }));
             }
         }
-        bail!("no supported NZXT Kraken found")
+        Ok(None)
     }
 
     fn write(&self, data: &[u8]) -> Result<()> {
