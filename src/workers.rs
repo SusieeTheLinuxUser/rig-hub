@@ -250,9 +250,13 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
     let mut kraken: Option<kraken::Kraken> = None;
     loop {
         if kraken.is_none() {
+            let mut why = "No NZXT Kraken Z / Elite / Plus found.".to_string();
             if let Some(api) = api.as_mut() {
                 let _ = api.refresh_devices();
-                kraken = kraken::Kraken::open(api).ok();
+                match kraken::Kraken::open(api) {
+                    Ok(k) => kraken = k,
+                    Err(e) => why = cant_open(&e),
+                }
             }
             let dev = match &kraken {
                 Some(k) => Dev::Ok(Cooler {
@@ -260,7 +264,7 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
                     brightness: k.lcd_info().map(|i| i.0).unwrap_or(100),
                     status: None,
                 }),
-                None => Dev::Missing("No NZXT Kraken Z / Elite / Plus found.".into()),
+                None => Dev::Missing(why),
             };
             update(&st, &ctx, |s| s.cooler = dev);
         }
@@ -307,6 +311,16 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
             }
         }
     }
+}
+
+/// A Kraken is plugged in but opening it failed; say why instead of "not found".
+fn cant_open(e: &anyhow::Error) -> String {
+    let hint = if cfg!(target_os = "linux") {
+        " Normal users need a udev rule for NZXT devices: rerun install.sh, or install liquidctl's rules."
+    } else {
+        ""
+    };
+    format!("{e:#}.{hint}")
 }
 
 // ------------------------------------------------------------------ mouse

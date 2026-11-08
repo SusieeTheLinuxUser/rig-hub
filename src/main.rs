@@ -790,7 +790,7 @@ impl App {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.label(RichText::new("Rig Hub").font(bold(19.0)));
-                ui.label(RichText::new(format!("alpha {}", VERSION.split("-alpha").next().unwrap_or(VERSION))).small().color(p.sub));
+                ui.label(RichText::new(VERSION).small().color(p.sub));
             });
         });
         ui.add_space(18.0);
