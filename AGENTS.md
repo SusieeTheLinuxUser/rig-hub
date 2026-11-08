@@ -58,8 +58,8 @@ At startup a worker thread runs `curl -sSI --max-time 10 <repo>/releases/latest`
 - **Kraken LCD buckets:** reuse a slot only when the upload fits; a bad overlap check once wiped other stored screens. GIFs are decoded one frame at a time.
 - **Private files** (widget status file `rig-hub-status.json`, KWin raise script) go only in `$XDG_RUNTIME_DIR` or an owner-only `~/.cache/rig-hub`, never shared `/tmp`. The widget reads the same path.
 - **Wayland close-to-tray:** winit can't hide a window, so on Linux closing destroys the window while `App`, workers and tray live on; `main()` reruns `eframe::run_native` to reopen. Raising the window goes through a KWin script over D-Bus.
-- **Single instance (Unix only):** a Unix socket `rig-hub.sock` in the runtime dir; a second launch pokes the first to show itself and exits. Not guaranteed: Windows has no guard, `--screenshot` runs skip it, and a failed bind still starts the app. So don't assume exclusive access to settings or devices.
-- **CLI flags:** `--page cooler|mouse|headset|mic|settings`, `--screenshot <file>` (saves the window to an image after ~4 s and exits; no tray, no lock), `--version`.
+- **Single instance (Unix only):** a Unix socket `rig-hub.sock` in the runtime dir (or the system temp dir when there's none, e.g. macOS); a second launch pokes the first to show itself and exits. Not guaranteed: Windows has no guard, `--screenshot` runs skip it, and a failed bind still starts the app. So don't assume exclusive access to settings or devices.
+- **CLI flags:** `--page cooler|mouse|headset|mic|settings`, `--screenshot <file>` (saves the window to an image after ~4 s and exits; no tray, no lock), `--version`. `--page` only applies to a fresh start: a second launch just shows the running window on its current page.
 - **Windows:** the app has no console, so every child process (`headsetcontrol`, `curl`, …) needs `CREATE_NO_WINDOW` or a black window flashes.
 - **KDE widget** is reinstalled into `~/.local/share/plasma/plasmoids/com.susiee.righub` whenever its embedded files change (KDE sessions only). Plasma picks it up after re-adding the widget or restarting Plasma.
 
