@@ -43,7 +43,7 @@ jobs:
             cp ../../../assets/rig-hub.svg .
             tar -czf ../../../rig-hub-${{ matrix.name }}.tar.gz rig-hub rig-hub.svg
           fi
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: rig-hub-${{ matrix.name }}.*
