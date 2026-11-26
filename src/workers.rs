@@ -85,7 +85,6 @@ impl<T> Dev<T> {
 pub struct Cooler {
     pub name: &'static str,
     pub brightness: u8,
-    pub status: Option<kraken::Status>,
 }
 
 pub struct Mic {
@@ -105,6 +104,8 @@ pub struct Toast {
 pub struct State {
     pub settings: Settings,
     pub cooler: Dev<Cooler>,
+    /// from the kernel driver, so also there when the LCD can't be opened or the model has none (X53)
+    pub liquid: Option<kraken::Status>,
     pub cpu_c: Option<f32>,
     #[cfg(target_os = "linux")]
     pub mouse: Dev<crate::mouse::Mouse>,
@@ -262,7 +263,6 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
                 Some(k) => Dev::Ok(Cooler {
                     name: k.name,
                     brightness: k.lcd_info().map(|i| i.0).unwrap_or(100),
-                    status: None,
                 }),
                 None => Dev::Missing(why),
             };
@@ -274,9 +274,7 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
             let cpu = crate::cpu_temp();
             update(&st, &ctx, |s| {
                 s.cpu_c = cpu;
-                if let Dev::Ok(c) = &mut s.cooler {
-                    c.status = status;
-                }
+                s.liquid = status;
             });
         }
         let cmd = match rx.recv_timeout(Duration::from_secs(2)) {
@@ -405,6 +403,9 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
             _ => {
                 hidpp = None; // unplugged or asleep; reopen on next reload
                 reload = true;
+                // fall back to ratbagd's active stage until HID++ reads again (maybe never: another mouse)
+                last = None;
+                update(&st, &ctx, |s| s.dpi_stage = None);
                 continue;
             }
         };

@@ -273,7 +273,7 @@ fn status_rows(st: &State) -> Vec<(String, String)> {
     for b in &st.batteries {
         rows.push((format!("🔋 {}", b.name), format!("{}{}", b.level, if b.charging { " ⚡" } else { "" })));
     }
-    let status = st.cooler.ok().and_then(|c| c.status.as_ref());
+    let status = st.liquid.as_ref();
     let or_dash = |v: Option<String>| v.unwrap_or_else(|| "–".into());
     rows.push(("💧 Liquid".into(), or_dash(status.map(|s| format!("{:.1} °C", s.liquid_c)))));
     rows.push(("🌡 CPU".into(), or_dash(st.cpu_c.map(|c| format!("{c:.0} °C")))));
@@ -843,17 +843,15 @@ impl App {
     // ------------------------------------------------------------ cooler
 
     fn cooler(&mut self, ui: &mut Ui, p: &Palette, st: &mut State) {
-        let c = match &mut st.cooler {
-            Dev::Ok(c) => c,
+        let name = match &st.cooler {
+            Dev::Ok(c) => c.name,
             Dev::Loading => return loading(ui, p),
-            Dev::Missing(why) => {
-                header(ui, p, "Cooler", "");
-                return missing(ui, p, "Cooler unavailable", why, &[]);
-            }
+            Dev::Missing(_) => "",
         };
-        header(ui, p, "Cooler", c.name);
+        header(ui, p, "Cooler", name);
 
-        let s = c.status.clone();
+        // temps come from the kernel driver, so they show even when the LCD can't be opened
+        let s = st.liquid.clone();
         let temp_color = |t: f32, warm: f32, hot: f32| if t >= hot { p.bad } else if t >= warm { p.warn } else { p.text };
         ui.columns(4, |cols| {
             match &s {
@@ -875,7 +873,11 @@ impl App {
         });
         ui.add_space(4.0);
 
-        let Dev::Ok(c) = &mut st.cooler else { return };
+        let c = match &mut st.cooler {
+            Dev::Ok(c) => c,
+            Dev::Missing(why) => return missing(ui, p, "LCD unavailable", why, &[]),
+            Dev::Loading => return,
+        };
         let settings = &mut st.settings;
         card(ui, p, "LCD screen", |ui| {
             ui.horizontal_top(|ui| {

@@ -323,14 +323,10 @@ impl HidppDpi {
         let mut buf = [0u8; 20];
         while Instant::now() < deadline {
             let n = self.dev.read_timeout(&mut buf, 100)?;
-            // only HID++ replies to us; any other report on this interface is dropped
-            if n >= 5 && matches!(buf[0], 0x10 | 0x11) && buf[1] == 0xFF && buf[3] & 0x0F == SWID {
-                if buf[2] == 0x8F || buf[2] == 0xFF {
-                    bail!("HID++ error {:#04x}", buf[5]);
-                }
-                if buf[2] == feature {
-                    return Ok(buf);
-                }
+            match reply(&buf[..n], feature) {
+                Some(Ok(())) => return Ok(buf),
+                Some(Err(code)) => bail!("HID++ error {code:#04x}"),
+                None => {}
             }
         }
         bail!("no HID++ reply")
@@ -350,9 +346,35 @@ impl HidppDpi {
     }
 }
 
+/// Is report `r` the answer to our request on `feature`? None: someone else's report, keep reading.
+/// An error report shifts everything one byte: [id, device, 0x8F|0xFF, feature, function|swid, code].
+fn reply(r: &[u8], feature: u8) -> Option<std::result::Result<(), u8>> {
+    if r.len() < 5 || !matches!(r[0], 0x10 | 0x11) || r[1] != 0xFF {
+        return None;
+    }
+    match r[2] {
+        0x8F | 0xFF => (r.len() >= 6 && r[3] == feature && r[4] & 0x0F == SWID).then(|| Err(r[5])),
+        f => (f == feature && r[3] & 0x0F == SWID).then_some(Ok(())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidpp_replies() {
+        // getCurrentDpiIndex on feature 0x0E answered: stage 2
+        assert_eq!(reply(&[0x11, 0xFF, 0x0E, 0xBA, 0x02, 0, 0], 0x0E), Some(Ok(())));
+        // HID++ 2.0 error for our request (ERR_INVALID_ARGUMENT)
+        assert_eq!(reply(&[0x11, 0xFF, 0xFF, 0x0E, 0xBA, 0x02, 0], 0x0E), Some(Err(0x02)));
+        // HID++ 1.0 error, e.g. a receiver whose mouse is asleep (ERR_RESOURCE_ERROR)
+        assert_eq!(reply(&[0x10, 0xFF, 0x8F, 0x0E, 0xBA, 0x09, 0], 0x0E), Some(Err(0x09)));
+        // another app's request (different software id) or another feature: not ours
+        assert_eq!(reply(&[0x11, 0xFF, 0x0E, 0xB1, 0x02, 0, 0], 0x0E), None);
+        assert_eq!(reply(&[0x11, 0xFF, 0xFF, 0x05, 0xBA, 0x02, 0], 0x0E), None);
+        assert_eq!(reply(&[0x01, 0x00, 0x00], 0x0E), None); // a plain mouse report
+    }
 
     #[test]
     fn special_choices_cover_every_entry() {
