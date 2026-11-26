@@ -40,6 +40,7 @@ Tests are small unit tests (parsers, version compare, single-instance lock, key 
 ## CI and releases
 
 - `.github/workflows/ci.yml`: on push to `main` and every PR. Build + test on `ubuntu-22.04`, `windows-latest`, `macos-15`; clippy on Linux only. (`macos-14` is rejected by GitHub now.)
+- **Dependabot** (`.github/dependabot.yml`): cargo and github-actions run weekly; minor+patch updates are grouped into one PR per ecosystem, majors still get individual PRs.
 - `.github/workflows/release.yml`: on a `v*` tag. Builds 5 archives: `rig-hub-{x86_64,aarch64}-linux.tar.gz`, `rig-hub-{aarch64,x86_64}-macos.tar.gz` (Intel is cross-built on Apple Silicon), `rig-hub-x86_64-windows.zip`.
 - **Version guard:** the first release step fails unless the tag minus `v` equals `version` in `Cargo.toml`. So: bump `Cargo.toml` (and `Cargo.lock`) in a PR, merge, then tag, e.g. `v0.1.0-alpha.5`.
 - Releases are published with `make_latest: true` and **not** marked pre-release, because the installers and the update check use `releases/latest`, which skips pre-releases.
@@ -58,6 +59,7 @@ At startup a worker thread runs `curl -sSI --max-time 10 <repo>/releases/latest`
 - **Kraken without permission:** hidraw nodes are root-only without a udev rule, but listing devices still works. `Kraken::open` returns `Ok(None)` for "not plugged in" and `Err` for "there but can't open", and the cooler page shows that real error plus the udev hint.
 - **Kraken temps are separate from the LCD:** liquid/pump/fan come from hwmon (world-readable) and live in `State::liquid`, not in `Cooler`. So they show in the tray, widget and cooler page even when the LCD can't be opened, or the model has no LCD (Kraken X53 is only found through hwmon).
 - **HID++ replies:** an error report shifts the bytes by one (`[id, dev, 0x8F|0xFF, feature, function|swid, code]`), so match it on byte 3 = feature and byte 4 = our software id (`mouse::reply`). When HID++ reads stop, the worker clears `dpi_stage` so the UI falls back to ratbagd's active stage instead of showing a stale one.
+- **resvg 0.50 bbox:** usvg's bbox methods (`abs_bounding_box`, `abs_layer_bounding_box`) return `Option` (empty nodes have none). `src/diagram.rs` skips such boxes (label/hit-rect) instead of unwrapping — don't reintroduce `unwrap`.
 - **Kraken LCD buckets:** reuse a slot only when the upload fits; a bad overlap check once wiped other stored screens. GIFs are decoded one frame at a time.
 - **Private files** (widget status file `rig-hub-status.json`, KWin raise script) go only in `$XDG_RUNTIME_DIR` or an owner-only `~/.cache/rig-hub`, never shared `/tmp`. The widget reads the same path.
 - **Wayland close-to-tray:** winit can't hide a window, so on Linux closing destroys the window while `App`, workers and tray live on; `main()` reruns `eframe::run_native` to reopen. Raising the window goes through a KWin script over D-Bus.

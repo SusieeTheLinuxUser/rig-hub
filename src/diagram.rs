@@ -94,7 +94,8 @@ impl Diagram {
         let mut clicked = None;
         for (i, label) in labels {
             let Some(leader) = self.tree.node_by_id(&format!("button{i}-leader")) else { continue };
-            let b = leader.abs_bounding_box();
+            // no bbox (resvg 0.50): empty node, nothing to anchor the label to
+            let Some(b) = leader.abs_bounding_box() else { continue };
             let left = b.x() < size.width() / 2.0;
             let y = img_rect.top() + (b.y() + b.height() / 2.0) * scale;
             let (anchor, pos) = if left {
@@ -122,8 +123,9 @@ impl Diagram {
                 clicked = Some(*i);
             }
             // the button itself is clickable too
-            if let Some(btn) = self.tree.node_by_id(&format!("button{i}")) {
-                let bb = btn.abs_bounding_box();
+            if let Some(btn) = self.tree.node_by_id(&format!("button{i}"))
+                && let Some(bb) = btn.abs_bounding_box()
+            {
                 let r = Rect::from_min_size(
                     img_rect.min + Vec2::new(bb.x() * scale, bb.y() * scale),
                     Vec2::new(bb.width() * scale, bb.height() * scale),
