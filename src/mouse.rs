@@ -382,5 +382,39 @@ mod tests {
         // index 0 ("Unknown") stays out, the last entry ("Battery level") is offered
         assert!(!choices.contains(&Action::Special(SPECIAL_BASE)));
         assert!(choices.contains(&Action::Special(SPECIAL_BASE + SPECIALS.len() as u32 - 1)));
+        let mixed = Action::choices(&[NONE, BUTTON, SPECIAL]);
+        assert_eq!(mixed.len(), 11 + SPECIALS.len() - 1 + 1);
+        // a device without these types offers nothing for them
+        assert_eq!(Action::choices(&[MACRO]), Vec::<Action>::new());
+    }
+
+    #[test]
+    fn labels_and_actions_survive_odd_values() {
+        // a special value with no entry in the table still labels as "Special"
+        assert_eq!(Action::Special(SPECIAL_BASE + 999).label(), "Special");
+        assert_eq!(Action::Special(SPECIAL_BASE + 12).label(), "Default DPI");
+        assert_eq!(Action::Button(99).label(), "Mouse button 99");
+        // dbus round-trip of the settable actions
+        for a in [Action::None, Action::Button(4), Action::Special(SPECIAL_BASE + 7), Action::Key(30)] {
+            let (kind, v) = a.to_dbus();
+            assert_eq!(action_of(kind, &v), a);
+        }
+        assert_eq!(action_of(MACRO, &Value::U32(0)), Action::Macro);
+        assert_eq!(action_of(42, &Value::U32(3)), Action::None);
+        // a value wrapped in a variant (what ratbagd sends for some properties)
+        assert_eq!(action_of(BUTTON, &Value::Variant(Box::new(Value::U32(2)))), Action::Button(2));
+    }
+
+    #[test]
+    fn dpi_values_unwrap_the_shapes_ratbagd_sends() {
+        assert_eq!(dpi_of(&Value::U32(800)), Some((800, false)));
+        // an (x, y) pair, as ratbagd reports for mice that store two values
+        let pair = Value::Structure(zbus::Structure::from((800u32, 1600u32)));
+        assert_eq!(dpi_of(&pair), Some((800, true)));
+        assert_eq!(dpi_of(&Value::Variant(Box::new(Value::U32(800)))), Some((800, false)));
+        // a struct whose first field isn't a u32: no reading rather than a guess
+        let odd = Value::Structure(zbus::Structure::from(("800", 1600u32)));
+        assert_eq!(dpi_of(&odd), None);
+        assert_eq!(dpi_of(&Value::U64(800)), None);
     }
 }
