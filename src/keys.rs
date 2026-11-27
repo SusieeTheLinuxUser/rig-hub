@@ -62,6 +62,8 @@ pub fn uncapturable() -> impl Iterator<Item = (u32, &'static str)> {
 
 #[cfg(test)]
 mod tests {
+    use super::KEYS;
+
     #[test]
     fn roundtrip() {
         use eframe::egui::Key;
@@ -70,5 +72,20 @@ mod tests {
         assert_eq!(super::name(164), "Play/Pause");
         assert_eq!(super::name(9999), "code 9999");
         assert!(super::uncapturable().any(|(c, _)| c == 29));
+    }
+
+    #[test]
+    fn table_is_consistent() {
+        // every capturable key maps back to exactly its own code
+        for (code, _, key) in KEYS {
+            if let Some(k) = key {
+                assert_eq!(super::from_egui(*k), Some(*code), "ambiguous egui mapping for {k:?}");
+            }
+        }
+        // no duplicate codes or names
+        assert!(KEYS.windows(2).all(|w| w[0].0 < w[1].0), "codes not strictly ascending");
+        let mut names: Vec<&str> = KEYS.iter().map(|k| k.1).collect();
+        names.sort_unstable();
+        assert!(names.windows(2).all(|w| w[0] != w[1]), "duplicate names");
     }
 }

@@ -278,4 +278,42 @@ Device: /org/freedesktop/UPower/devices/DisplayDevice
     fn failed_command_is_an_error() {
         assert!(run("sh", &["-c", "exit 1"]).is_err());
     }
+
+    #[test]
+    fn amixer_handles_one_direction_and_the_switch() {
+        // capture-only control (no Playback in Limits)
+        let cap = "Simple mixer control 'Mic',0\n  Limits: Capture 0 - 30\n  Front Left: Capture 15 [50%] [on]";
+        assert_eq!(parse_amixer(cap), (None, Some(Level { value: 15, max: 30, on: true })));
+        // mono control with the switch off
+        let off = "Simple mixer control 'Speaker',0\n  Limits: Playback 0 - 10\n  Mono: Playback 5 [50%] [off]";
+        assert_eq!(parse_amixer(off).0, Some(Level { value: 5, max: 10, on: false }));
+        // control without a switch: counts as on
+        let bare = "Simple mixer control 'Speaker',0\n  Mono: Playback 3";
+        assert_eq!(parse_amixer(bare).0, Some(Level { value: 3, max: 3, on: true }));
+        // zero value
+        let zero = "Simple mixer control 'Mic',0\n  Limits: Playback 0 - 20\n  Mono: Playback 0 [0%] [on]";
+        assert_eq!(parse_amixer(zero).0, Some(Level { value: 0, max: 20, on: true }));
+    }
+
+    #[test]
+    fn upower_edge_cases() {
+        assert_eq!(parse_upower(""), Vec::<PowerDevice>::new()); // upower missing or empty
+        let zero = "Device: /org/freedesktop/UPower/devices/bat\n  percentage:          0%\n  state:               discharging\n";
+        assert_eq!(parse_upower(zero)[0].level, "0%");
+        // a coarse battery-level that only guesses: keep the word, not the percent
+        let unknown = "Device: /d/b\n  percentage:          3%\n  battery-level:       unknown\n  state:               discharging\n";
+        assert_eq!(parse_upower(unknown)[0].level, "3%");
+        // no model line: the object path's last part stands in
+        let no_model = "Device: /org/freedesktop/UPower/devices/mouse_hidpp_battery_2\n  percentage:          55%\n  state:               discharging\n";
+        assert_eq!(parse_upower(no_model)[0].name, "mouse_hidpp_battery_2");
+    }
+
+    #[test]
+    fn headset_json_without_battery_or_devices() {
+        // a headset whose reply has no battery object at all
+        let h = parse_headset(r#"{"devices":[{"product":"X"}]}"#).unwrap().unwrap();
+        assert_eq!(h.battery, Battery::Off);
+        assert_eq!(parse_headset("{}").unwrap(), None); // no devices key
+        assert!(parse_headset("not json").is_err()); // unparseable output
+    }
 }

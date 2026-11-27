@@ -332,4 +332,33 @@ mod tests {
         c[2] = bucket(24000, 100);
         assert_eq!(memory_offset(&c, 2, 400), None);
     }
+
+    #[test]
+    fn offset_boundaries() {
+        let empty = vec![[0u8; REPORT]; 16];
+        // a bucket ending exactly where ours starts is not an overlap: reuse the slot
+        let mut b = empty.clone();
+        b[0] = bucket(0, 5000);
+        b[2] = bucket(5000, 100);
+        assert_eq!(memory_offset(&b, 2, 1600), Some(5000u16.to_le_bytes()));
+        // a bucket starting exactly where our upload would end is not an overlap either
+        let mut c = empty.clone();
+        c[2] = bucket(5000, 1000);
+        c[3] = bucket(6600, 100);
+        assert_eq!(memory_offset(&c, 2, 1600), Some(5000u16.to_le_bytes()));
+        // ...but starting one page earlier overlaps: append after the last used byte
+        c[3] = bucket(6599, 100);
+        assert_eq!(memory_offset(&c, 2, 1600), Some(6699u16.to_le_bytes()));
+        // an upload that would exactly fill the last free space, with a real overlap:
+        // liquidctl's `<` sends it to a wipe-and-restart, and the port matches that
+        let mut d = empty.clone();
+        d[1] = bucket(0, (LCD_TOTAL_MEMORY - 320) as u16);
+        d[2] = bucket(12000, 100);
+        assert_eq!(memory_offset(&d, 2, 320), None);
+        // ...while with no overlap the slot is reused even at the exact end of memory
+        let mut e = empty.clone();
+        e[1] = bucket(0, (LCD_TOTAL_MEMORY - 320) as u16);
+        e[2] = bucket((LCD_TOTAL_MEMORY - 320) as u16, 0);
+        assert_eq!(memory_offset(&e, 2, 320), Some(((LCD_TOTAL_MEMORY - 320) as u16).to_le_bytes()));
+    }
 }

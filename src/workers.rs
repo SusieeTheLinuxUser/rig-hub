@@ -531,3 +531,40 @@ fn mic(st: Shared, ctx: Context, rx: Receiver<MicCmd>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_roundtrip() {
+        let s = Settings { theme: "Nord".into(), lcd_angle: -90.0, ..Default::default() };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(serde_json::from_str::<Settings>(&json).unwrap() == s);
+        // missing fields fall back to their defaults, one by one
+        let partial: Settings = serde_json::from_str(r#"{"theme":"Dracula"}"#).unwrap();
+        assert!(partial.theme == "Dracula");
+        assert!(partial.close_to_tray);
+        assert!(partial.idle_minutes == 10);
+        // unknown fields are ignored (a future version may add some)
+        let extra: Settings = serde_json::from_str(r#"{"theme":"Nord","nonsense":1}"#).unwrap();
+        assert!(extra.theme == "Nord");
+        // garbage resets everything instead of failing the app
+        assert!(Settings::default() == serde_json::from_str::<Settings>("banana").unwrap_or_default());
+    }
+
+    #[test]
+    fn write_atomic_replaces_and_leaves_no_tmp() {
+        let dir = std::env::temp_dir().join(format!("rig-hub-test-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("f.json");
+        assert!(crate::write_atomic(&p, "one", false));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "one");
+        assert!(crate::write_atomic(&p, "two", true)); // the durable settings path
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "two");
+        assert!(!dir.join("f.tmp").exists());
+        // no directory to write into: false, not a panic
+        assert!(!crate::write_atomic(&dir.join("no/such/dir/f"), "x", false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -1521,6 +1521,36 @@ mod update_tests {
         assert_eq!(latest_tag("HTTP/2 404\r\ncontent-length: 0\r\n\r\n"), None);
         assert_eq!(latest_tag("location: https://github.com/x/y/releases/tag/banana\r\n"), None);
     }
+
+    #[test]
+    fn parses_tag_from_curl_headers_tolerates_case_and_space() {
+        // GitHub answers with "location", but be forgiving: "Location", no space, trailing spaces
+        let cap = "HTTP/2 302\r\nLocation:https://github.com/x/y/releases/tag/v0.2.0\r\n\r\n";
+        assert_eq!(latest_tag(cap), Some("0.2.0"));
+        let slack = "  location:  https://github.com/x/y/releases/tag/v0.3.0  \r\n";
+        assert_eq!(latest_tag(slack), Some("0.3.0"));
+        // not a release-tag URL (e.g. a redirect to some other page): no update
+        assert_eq!(latest_tag("location: https://github.com/x/y/releases/download/thing\r\n"), None);
+        assert_eq!(latest_tag("x-location: https://github.com/x/y/releases/tag/v1.0.0\r\n"), None);
+    }
+
+    #[test]
+    fn ver_understands_the_shipped_shapes_only() {
+        use super::ver;
+        assert!(ver("0.1.0").is_some());
+        assert!(ver("0.1.0-alpha.3").is_some());
+        // pre-release without a number counts as .0
+        assert_eq!(ver("0.1.0-alpha"), ver("0.1.0-alpha.0"));
+        // not our shapes: no update either way
+        assert!(ver("").is_none());
+        assert!(ver("0.1").is_none());
+        assert!(ver("1.2.3.4").is_none());
+        assert!(ver("banana").is_none());
+        assert!(ver("0.1.0-omega.5").is_none());
+        assert!(ver("0.1.0-alpha.5+build").is_none());
+        assert!(ver("0.1.0-alpha.ten").is_none());
+        assert!(ver("99999999999.0.0").is_none());
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -1540,5 +1570,103 @@ mod tests {
         assert!(next.is_some());
         drop(next);
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn state() -> State {
+        State {
+            headset: Dev::Ok(audio::Headset {
+                name: "HS80".into(),
+                battery: audio::Battery::Level(42),
+                sidetone: true,
+                inactive_time: false,
+            }),
+            batteries: vec![audio::PowerDevice {
+                name: "G305".into(),
+                level: "57%".into(),
+                charging: true,
+            }],
+            liquid: Some(kraken::Status {
+                liquid_c: 31.25,
+                pump_rpm: 2100,
+                pump_pct: 60.0,
+                fan_rpm: 900,
+                fan_pct: 40.0,
+            }),
+            cpu_c: Some(63.4),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rows_show_all_readings() {
+        let st = state();
+        let rows = status_rows(&st);
+        let values: Vec<(String, String)> = rows.iter().map(|(l, v)| (l.clone(), v.clone())).collect();
+        assert!(values.contains(&("🎧 Headset".into(), "42%".into())));
+        assert!(values.contains(&("🔋 G305".into(), "57% ⚡".into())));
+        assert!(values.contains(&("💧 Liquid".into(), "31.2 °C".into())));
+        assert!(values.contains(&("🌡 CPU".into(), "63 °C".into())));
+        assert!(values.contains(&("🌀 Pump".into(), "2100 rpm".into())));
+        assert!(values.contains(&("🌀 Fans".into(), "900 rpm".into())));
+    }
+
+    #[test]
+    fn rows_fall_back_to_dashes_when_nothing_is_read() {
+        let rows = status_rows(&State::default());
+        let values: Vec<&str> = rows.iter().map(|(l, v)| (l.as_str(), v.as_str()))
+            .filter(|(l, _)| *l == "💧 Liquid" || *l == "🌡 CPU" || *l == "🌀 Pump" || *l == "🌀 Fans" || *l == "🖱 Mouse")
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(values, ["–", "–", "–", "–", "–"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn mouse_with_stages() -> crate::mouse::Mouse {
+        use crate::mouse::{Mouse, Profile, Resolution};
+        let path: zbus::OwnedObjectPath = "/org/freedesktop/ratbag1".try_into().unwrap();
+        let res = |index: u32, dpi: u32, active: bool| Resolution {
+            path: path.clone(),
+            index,
+            dpi,
+            pair: false,
+            allowed: vec![],
+            active,
+            default: false,
+        };
+        Mouse {
+            path: path.clone(),
+            name: "Test".into(),
+            model: "usb:0000:0000:0".into(),
+            profiles: vec![Profile {
+                path: path.clone(),
+                index: 0,
+                active: true,
+                resolutions: vec![res(0, 400, false), res(1, 800, true)],
+                buttons: vec![],
+            }],
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn current_dpi_follows_the_live_stage_when_it_can() {
+        let mut st = state();
+        st.mouse = Dev::Ok(mouse_with_stages());
+        // the HID++ stage wins over ratbagd's active stage
+        st.dpi_stage = Some(0);
+        assert_eq!(current_dpi(&st), Some(400));
+        st.dpi_stage = Some(1);
+        assert_eq!(current_dpi(&st), Some(800));
+        // a stage the mouse doesn't have: no reading instead of the wrong DPI
+        st.dpi_stage = Some(9);
+        assert_eq!(current_dpi(&st), None);
+        // without HID++, fall back to ratbagd's active stage
+        st.dpi_stage = None;
+        assert_eq!(current_dpi(&st), Some(800));
     }
 }

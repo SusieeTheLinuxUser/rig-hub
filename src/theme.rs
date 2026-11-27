@@ -94,3 +94,32 @@ pub fn apply(ctx: &egui::Context, p: &Palette) {
 pub fn bold(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name("bold".into()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_theme_resolves_by_name_and_unknown_falls_back() {
+        for t in THEMES {
+            assert_eq!(by_name(t.name).name, t.name);
+        }
+        // a saved theme that no longer exists (or a broken settings.json): Midnight
+        assert_eq!(by_name("nope").name, "Midnight");
+        assert_eq!(by_name("").name, "Midnight");
+    }
+
+    #[test]
+    fn on_picks_dark_text_only_on_light_colors() {
+        assert_eq!(on(hex(0xFFFFFF)), hex(0x111111));
+        assert_eq!(on(hex(0xE6E8EF)), hex(0x111111)); // a light text color
+        assert_eq!(on(hex(0x000000)), Color32::WHITE);
+        assert_eq!(on(hex(0x8B5CF6)), Color32::WHITE); // Midnight's accent
+    }
+
+    #[test]
+    fn hex_decodes_rgb() {
+        assert_eq!(hex(0x123456), Color32::from_rgb(0x12, 0x34, 0x56));
+        assert_eq!(hex(0x000000), Color32::BLACK);
+    }
+}
