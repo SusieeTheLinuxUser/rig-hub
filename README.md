@@ -38,7 +38,7 @@ irm https://raw.githubusercontent.com/SusieeTheLinuxUser/rig-hub/main/install.ps
 Rig Hub stands on the shoulders of existing open-source drivers, so it supports what they support:
 
 - **Mice**: anything [libratbag](https://github.com/libratbag/libratbag) supports (most Logitech G, Steelseries, Roccat, …). Live DPI pop-ups: Logitech HID++ mice. Needs `ratbagd` running. The mouse picture comes from [Piper](https://github.com/libratbag/piper) if installed.
-- **Coolers**: NZXT Kraken Z, Kraken 2024 / Elite 2024 / Plus 2024. LCD protocol ported from [liquidctl](https://github.com/liquidctl/liquidctl).
+- **Coolers**: NZXT Kraken Z, Kraken Elite 2024, Kraken Plus 2024. LCD protocol ported from [liquidctl](https://github.com/liquidctl/liquidctl).
 - **Headsets**: anything [HeadsetControl](https://github.com/Sapd/HeadsetControl) supports (Corsair, Logitech, SteelSeries, HyperX, …).
 - **Mics**: Blue Yeti (USB mixer controls via ALSA).
 
