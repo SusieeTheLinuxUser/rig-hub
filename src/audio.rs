@@ -46,7 +46,7 @@ pub fn parse_headset(json: &str) -> Result<Option<Headset>> {
     let Some(d) = v["devices"].as_array().and_then(|a| a.first()) else {
         return Ok(None);
     };
-    let level = d["battery"]["level"].as_i64().filter(|l| *l >= 0).map(|l| l as u8);
+    let level = d["battery"]["level"].as_i64().and_then(|l| u8::try_from(l).ok());
     let battery = match d["battery"]["status"].as_str() {
         Some("BATTERY_AVAILABLE") => Battery::Level(level.unwrap_or(0)),
         Some("BATTERY_CHARGING") => Battery::Charging(level),
@@ -228,6 +228,11 @@ mod tests {
         let off = r#"{"devices":[{"battery":{"status":"BATTERY_UNAVAILABLE"}}]}"#;
         assert_eq!(parse_headset(off).unwrap().unwrap().battery, Battery::Off);
         assert_eq!(parse_headset(r#"{"devices":[]}"#).unwrap(), None);
+        // an out-of-range level must not be truncated into a plausible one
+        let absurd = r#"{"devices":[{"battery":{"status":"BATTERY_AVAILABLE","level":300}}]}"#;
+        assert_eq!(parse_headset(absurd).unwrap().unwrap().battery, Battery::Level(0));
+        let negative = r#"{"devices":[{"battery":{"status":"BATTERY_AVAILABLE","level":-7}}]}"#;
+        assert_eq!(parse_headset(negative).unwrap().unwrap().battery, Battery::Level(0));
     }
 
     #[test]
