@@ -284,14 +284,11 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
         };
         let Some(k) = &kraken else { continue };
         let r = match cmd {
-            CoolerCmd::Brightness(pct) => k.set_brightness(pct).map(|()| {
-                update(&st, &ctx, |s| {
-                    if let Dev::Ok(c) = &mut s.cooler {
-                        c.brightness = pct;
-                    }
-                });
-                "Brightness set"
-            }),
+            CoolerCmd::Brightness(pct) => {
+                let r = k.set_brightness(pct);
+                update(&st, &ctx, |s| brightness_done(s, &r, pct));
+                r.map(|()| "Brightness set")
+            }
             CoolerCmd::Liquid => k.show_liquid().map(|()| "Showing liquid temperature"),
             CoolerCmd::Show(path, angle) => {
                 update(&st, &ctx, |s| s.busy = Some("Uploading to the LCD…"));
@@ -308,6 +305,16 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
                 kraken = None; // reopen next round in case it was unplugged
             }
         }
+    }
+}
+
+/// The slider moves to `pct` only when the device accepted it, so it never shows a
+/// brightness the cooler refused.
+fn brightness_done(st: &mut State, r: &anyhow::Result<()>, pct: u8) {
+    if r.is_ok()
+        && let Dev::Ok(c) = &mut st.cooler
+    {
+        c.brightness = pct;
     }
 }
 
@@ -569,5 +576,16 @@ mod tests {
         // no directory to write into: false, not a panic
         assert!(!crate::write_atomic(&dir.join("no/such/dir/f"), "x", false));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn brightness_sticks_only_when_the_device_takes_it() {
+        let mut st = State { cooler: Dev::Ok(Cooler { name: "Kraken Elite", brightness: 30 }), ..Default::default() };
+        // refused: the slider keeps the value the cooler still runs at
+        brightness_done(&mut st, &Err(anyhow::anyhow!("unplugged")), 80);
+        assert!(st.cooler.ok().unwrap().brightness == 30, "a refused brightness must not move the slider");
+        // accepted: now it moves
+        brightness_done(&mut st, &Ok(()), 80);
+        assert!(st.cooler.ok().unwrap().brightness == 80);
     }
 }

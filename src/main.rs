@@ -907,7 +907,7 @@ impl App {
 
                     ui.label(RichText::new("Brightness").color(p.sub));
                     if let Some(v) = live_slider(ui, "brightness", c.brightness as u32, 0..=100, |v| format!("{v}%")) {
-                        c.brightness = v as u8;
+                        // the worker moves the slider once the cooler has taken the value
                         let _ = self.w.cooler.send(CoolerCmd::Brightness(v as u8));
                     }
                     ui.add_space(8.0);
