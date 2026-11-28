@@ -1189,8 +1189,8 @@ impl App {
                 });
             });
             if let Some(a) = set {
-                let _ = self.w.mouse.send(MouseCmd::Action(b.path.clone(), a.clone()));
-                b.action = a; // optimistic; the worker reloads after saving
+                // the worker applies the action once ratbagd has taken it
+                let _ = self.w.mouse.send(MouseCmd::Action(b.path.clone(), a));
             }
         }
 

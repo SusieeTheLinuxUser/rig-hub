@@ -412,13 +412,14 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
                     None => continue,
                 };
                 update(&st, &ctx, |s| s.busy = Some("Saving to the mouse…"));
-                let r = match cmd {
-                    MouseCmd::Action(button, action) => rb.set_action(&button, &action),
-                    MouseCmd::Dpi(res, dpi) => rb.set_dpi(&res, dpi),
-                    MouseCmd::Activate(path, iface) => rb.set_active(&path, iface),
+                let r = match &cmd {
+                    MouseCmd::Action(button, action) => rb.set_action(button, action),
+                    MouseCmd::Dpi(res, dpi) => rb.set_dpi(res, *dpi),
+                    MouseCmd::Activate(path, iface) => rb.set_active(path, iface),
                     };
                 let r = r.and_then(|()| rb.commit(&device));
                 update(&st, &ctx, |s| s.busy = None);
+                update(&st, &ctx, |s| mouse_done(s, &r, &cmd));
                 report(&st, &ctx, r, "Saved to the mouse");
                 reload = true;
                 last = None;
@@ -478,6 +479,29 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
                     .ok();
             }
         }
+    }
+}
+
+/// The mouse keeps a change only when ratbagd took it; the UI reads `State`, so it never
+/// shows a button or DPI the mouse refused.
+#[cfg(target_os = "linux")]
+fn mouse_done(st: &mut State, r: &anyhow::Result<()>, cmd: &MouseCmd) {
+    if r.is_err() {
+        return;
+    }
+    let Dev::Ok(m) = &mut st.mouse else { return };
+    match cmd {
+        MouseCmd::Action(path, action) => {
+            for p in &mut m.profiles {
+                for b in &mut p.buttons {
+                    if b.path == *path {
+                        b.action = action.clone();
+                    }
+                }
+            }
+        }
+        MouseCmd::Dpi(..) => {}
+        MouseCmd::Activate(..) => {} // the next reload picks up the new active flags from ratbagd
     }
 }
 
