@@ -500,7 +500,15 @@ fn mouse_done(st: &mut State, r: &anyhow::Result<()>, cmd: &MouseCmd) {
                 }
             }
         }
-        MouseCmd::Dpi(..) => {}
+        MouseCmd::Dpi(res, dpi) => {
+            for p in &mut m.profiles {
+                for x in &mut p.resolutions {
+                    if x.path == res.path {
+                        x.dpi = *dpi;
+                    }
+                }
+            }
+        }
         MouseCmd::Activate(..) => {} // the next reload picks up the new active flags from ratbagd
     }
 }

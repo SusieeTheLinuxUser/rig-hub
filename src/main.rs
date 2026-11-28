@@ -1213,8 +1213,8 @@ impl App {
                         None
                     };
                     if let Some(dpi) = new.filter(|&d| d != r.dpi) {
+                        // the worker applies the DPI once ratbagd has taken it
                         let _ = self.w.mouse.send(MouseCmd::Dpi(r.clone(), dpi));
-                        r.dpi = dpi;
                     }
                     if r.default {
                         ui.label(RichText::new("default").small().color(p.sub));
