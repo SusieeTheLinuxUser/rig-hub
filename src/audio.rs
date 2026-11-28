@@ -70,7 +70,15 @@ pub fn headset() -> Result<Option<Headset>> {
         .args(["-b", "-o", "json"])
         .output()
         .context("headsetcontrol not found")?;
-    parse_headset(&String::from_utf8_lossy(&out.stdout))
+    parse_headset_output(out.status.success(), &String::from_utf8_lossy(&out.stdout), &String::from_utf8_lossy(&out.stderr))
+}
+
+fn parse_headset_output(success: bool, stdout: &str, stderr: &str) -> Result<Option<Headset>> {
+    let headset = parse_headset(stdout)?;
+    if !success && headset.is_some() {
+        bail!("headsetcontrol: {}", stderr.trim());
+    }
+    Ok(headset)
 }
 
 /// `flag` is "-s" (sidetone 0-128) or "-i" (auto-off minutes 0-90).
@@ -233,6 +241,13 @@ mod tests {
         assert_eq!(parse_headset(absurd).unwrap().unwrap().battery, Battery::Level(0));
         let negative = r#"{"devices":[{"battery":{"status":"BATTERY_AVAILABLE","level":-7}}]}"#;
         assert_eq!(parse_headset(negative).unwrap().unwrap().battery, Battery::Level(0));
+    }
+
+    #[test]
+    fn headset_command_status() {
+        assert_eq!(parse_headset_output(false, r#"{"devices":[]}"#, "no device").unwrap(), None);
+        assert!(parse_headset_output(false, "", "device query failed").is_err());
+        assert!(parse_headset_output(false, r#"{"devices":[{}]}"#, "device query failed").is_err());
     }
 
     #[test]
