@@ -361,4 +361,22 @@ mod tests {
         e[2] = bucket((LCD_TOTAL_MEMORY - 320) as u16, 0);
         assert_eq!(memory_offset(&e, 2, 320), Some(((LCD_TOTAL_MEMORY - 320) as u16).to_le_bytes()));
     }
+
+    #[test]
+    fn offset_edges_last_bucket_and_zero_pages() {
+        let empty = vec![[0u8; REPORT]; 16];
+        // zero pages reuse the slot's own offset (an upload is never 0 pages, but
+        // the math must not panic or wrap)
+        assert_eq!(memory_offset(&empty, 0, 0), Some([0, 0]));
+        // the LAST bucket as the write target: its own space is reused
+        let mut b = empty.clone();
+        b[15] = bucket(20000, 1000);
+        assert_eq!(memory_offset(&b, 15, 500), Some(20000u16.to_le_bytes()));
+        // too big for the slot with an overlapping bucket in the way: append after
+        // the last used byte
+        let mut c = empty.clone();
+        c[15] = bucket(0, 100);
+        c[5] = bucket(50, 100);
+        assert_eq!(memory_offset(&c, 15, 200), Some(150u16.to_le_bytes()));
+    }
 }

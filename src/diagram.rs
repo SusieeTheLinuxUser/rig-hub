@@ -13,9 +13,10 @@ fn extract(name: &str) -> Option<Vec<u8>> {
     out.status.success().then_some(out.stdout)
 }
 
-/// Piper's artwork for a ratbag model string like "usb:046d:c08b:0".
-pub fn piper_svg(model: &str) -> Option<Vec<u8>> {
-    let ini = String::from_utf8(extract("svg-lookup.ini")?).ok()?;
+/// The Svg= entry the lookup ini picks for `model`, or None. The name always
+/// comes from the ini's own Svg= line, never from `model`, so no model string
+/// can point the extraction outside the gresource.
+fn lookup_svg(ini: &str, model: &str) -> Option<String> {
     let mut svg = None;
     let mut matched = false;
     for line in ini.lines() {
@@ -29,7 +30,13 @@ pub fn piper_svg(model: &str) -> Option<Vec<u8>> {
             svg = Some(s.trim().to_string());
         }
     }
-    extract(&svg?)
+    svg
+}
+
+/// Piper's artwork for a ratbag model string like "usb:046d:c08b:0".
+pub fn piper_svg(model: &str) -> Option<Vec<u8>> {
+    let ini = String::from_utf8(extract("svg-lookup.ini")?).ok()?;
+    extract(&lookup_svg(&ini, model)?)
 }
 
 /// (width, height, highlighted button, color) the cached texture was drawn for.
@@ -136,5 +143,49 @@ impl Diagram {
             }
         }
         clicked
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // the shape of piper's svg-lookup.ini: DeviceMatch is a ';' list of model
+    // prefixes, Svg= names the file inside the gresource
+    const INI: &str = "[svg:g502-hero]\nDeviceMatch=usb:046d:c08b;usb:046d:c33b\nSvg=g502-hero.svg\n\n[svg:g305]\nDeviceMatch=usb:046d:c07f\nSvg=g305.svg\n";
+
+    #[test]
+    fn lookup_matches_the_model_prefix() {
+        assert_eq!(lookup_svg(INI, "usb:046d:c08b:0").as_deref(), Some("g502-hero.svg"));
+        assert_eq!(lookup_svg(INI, "usb:046d:c33b").as_deref(), Some("g502-hero.svg"));
+        assert_eq!(lookup_svg(INI, "usb:046d:c07f:1").as_deref(), Some("g305.svg"));
+        assert_eq!(lookup_svg(INI, "usb:1234:5678:0"), None);
+        assert_eq!(lookup_svg(INI, ""), None);
+    }
+
+    #[test]
+    fn a_weird_model_only_selects_it_never_names_the_file() {
+        // /, .. and spaces in the model change at most WHICH entry is picked
+        for evil in ["../etc/passwd", "usb:../..", "a b c", "  ", "\n[svg:evil]\nSvg=evil.svg"] {
+            assert_eq!(lookup_svg(INI, evil), None, "{evil:?} must not match");
+        }
+        // a model with path bits that happens to match still resolves to the ini's
+        // own name, which carries none of the model's path bits
+        for evil in ["usb:046d:c08b/../../x", "usb:046d:c08b with spaces"] {
+            assert_eq!(lookup_svg(INI, evil).as_deref(), Some("g502-hero.svg"), "{evil:?} may select, not name");
+        }
+    }
+
+    #[test]
+    fn sections_reset_the_match_and_empty_segments_never_match() {
+        // the section without its own DeviceMatch must not inherit the previous one
+        let boundary = "[svg:a]\nDeviceMatch=usb:046d:c08b\nSvg=a.svg\n\n[svg:b]\nSvg=b.svg\n";
+        assert_eq!(lookup_svg(boundary, "usb:046d:c08b:0").as_deref(), Some("a.svg"));
+        // a leading or trailing ';' makes an empty segment, which matches nothing
+        let padded = "[svg:a]\nDeviceMatch=;usb:046d:c08b;\nSvg=a.svg\n";
+        assert_eq!(lookup_svg(padded, ""), None);
+        assert_eq!(lookup_svg(padded, "usb:046d:c08b:0").as_deref(), Some("a.svg"));
+        // a CRLF ini file works the same
+        assert_eq!(lookup_svg(&INI.replace('\n', "\r\n"), "usb:046d:c08b:0").as_deref(), Some("g502-hero.svg"));
     }
 }

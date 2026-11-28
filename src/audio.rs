@@ -102,7 +102,9 @@ pub struct PowerDevice {
 
 /// Battery-powered devices UPower knows about (UPS, wireless mice, controllers…) from `upower --dump`.
 pub fn parse_upower(text: &str) -> Vec<PowerDevice> {
-    text.split("\n\n")
+    // blocks are separated by an empty line; normalize \r\n so the split still finds them
+    text.replace("\r\n", "\n")
+        .split("\n\n")
         .filter_map(|block| {
             let field = |k: &str| block.lines().find_map(|l| l.trim().strip_prefix(k)).map(str::trim);
             let path = field("Device:")?;
@@ -158,8 +160,13 @@ pub fn parse_amixer(text: &str) -> (Option<Level>, Option<Level>) {
             let words: Vec<&str> = line.split_whitespace().collect();
             for (i, w) in words.iter().enumerate() {
                 let Some(value) = words.get(i + 1).and_then(|v| v.parse::<u32>().ok()) else { continue };
-                // the [on]/[off] switch is the first bracket after the value that says on/off
-                let on = words[i + 2..].iter().take(4).find(|s| **s == "[on]" || **s == "[off]") != Some(&"[off]");
+                // the [on]/[off] switch is the first bracket after the value that says
+                // on/off, within this channel's own tokens: never the next channel's switch
+                let next = words[i + 2..].iter().position(|s| *s == "Playback" || *s == "Capture");
+                let on = words[i + 2..next.map_or(words.len(), |p| i + 2 + p)]
+                    .iter()
+                    .find(|s| **s == "[on]" || **s == "[off]")
+                    != Some(&"[off]");
                 match *w {
                     "Playback" => play = Some(Level { value, max: max.0.unwrap_or(value), on }),
                     "Capture" => cap = Some(Level { value, max: max.1.unwrap_or(value), on }),
@@ -295,6 +302,17 @@ Device: /org/freedesktop/UPower/devices/DisplayDevice
     }
 
     #[test]
+    fn amixer_switch_belongs_to_its_own_channel() {
+        // playback has no switch of its own here, so capture's [off] behind it
+        // must not mute the playback
+        let mixed = "Simple mixer control 'Mic',0\n  Limits: Capture 0 - 30\n  Front Left: Playback 11 [55%] Capture 21 [off]";
+        assert_eq!(
+            parse_amixer(mixed),
+            (Some(Level { value: 11, max: 11, on: true }), Some(Level { value: 21, max: 30, on: false }))
+        );
+    }
+
+    #[test]
     fn amixer_handles_one_direction_and_the_switch() {
         // capture-only control (no Playback in Limits)
         let cap = "Simple mixer control 'Mic',0\n  Limits: Capture 0 - 30\n  Front Left: Capture 15 [50%] [on]";
@@ -324,11 +342,76 @@ Device: /org/freedesktop/UPower/devices/DisplayDevice
     }
 
     #[test]
+    fn upower_crlf_keeps_every_block() {
+        // a dump with \r\n line endings must not collapse into one block
+        let crlf = "Device: /org/freedesktop/UPower/devices/ups_a\r\n  percentage:          40%\r\n  state:               discharging\r\n\r\nDevice: /org/freedesktop/UPower/devices/mouse_b\r\n  percentage:          60%\r\n  state:               charging\r\n";
+        assert_eq!(
+            parse_upower(crlf),
+            [
+                PowerDevice { name: "ups_a".into(), level: "40%".into(), charging: false },
+                PowerDevice { name: "mouse_b".into(), level: "60%".into(), charging: true },
+            ]
+        );
+    }
+
+    #[test]
     fn headset_json_without_battery_or_devices() {
         // a headset whose reply has no battery object at all
         let h = parse_headset(r#"{"devices":[{"product":"X"}]}"#).unwrap().unwrap();
         assert_eq!(h.battery, Battery::Off);
         assert_eq!(parse_headset("{}").unwrap(), None); // no devices key
         assert!(parse_headset("not json").is_err()); // unparseable output
+    }
+
+    #[test]
+    fn headset_json_odd_fields() {
+        // a battery object of the wrong type: no crash, the battery reads as off
+        let h = parse_headset(r#"{"devices":[{"battery":"x","product":"Y"}]}"#).unwrap().unwrap();
+        assert_eq!(h.battery, Battery::Off);
+        assert_eq!(h.name, "Y");
+        // a level of the wrong type is unknown: 0, never a guessed number
+        let h = parse_headset(r#"{"devices":[{"battery":{"status":"BATTERY_AVAILABLE","level":"48"}}]}"#).unwrap().unwrap();
+        assert_eq!(h.battery, Battery::Level(0));
+        // charging keeps a real level; with several devices the first one wins
+        let h = parse_headset(
+            r#"{"devices":[{"battery":{"status":"BATTERY_CHARGING","level":55}},{"battery":{"status":"BATTERY_AVAILABLE","level":10}}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(h.battery, Battery::Charging(Some(55)));
+        // devices of the wrong shape: no headset rather than a guess
+        assert_eq!(parse_headset(r#"{"devices":{}}"#).unwrap(), None);
+        assert_eq!(parse_headset("[]").unwrap(), None);
+        // a null entry yields the defaults, never a panic
+        let h = parse_headset(r#"{"devices":[null]}"#).unwrap().unwrap();
+        assert_eq!(h.name, "Headset");
+        assert_eq!(h.battery, Battery::Off);
+        // a level over 100 fits a byte and is shown as the device reported it
+        let h = parse_headset(r#"{"devices":[{"battery":{"status":"BATTERY_AVAILABLE","level":101}}]}"#).unwrap().unwrap();
+        assert_eq!(h.battery, Battery::Level(101));
+    }
+
+    #[test]
+    fn amixer_survives_crlf_and_both_channels_on_one_line() {
+        // \r\n line endings parse the same as \n
+        let (play, cap) = parse_amixer(&MIC.replace('\n', "\r\n"));
+        assert_eq!(play, Some(Level { value: 11, max: 20, on: true }));
+        assert_eq!(cap, Some(Level { value: 21, max: 22, on: false }));
+        // both directions on one Mono line, capture listed first
+        let both = "Simple mixer control 'Mic',0\n  Limits: Capture 0 - 30 Playback 0 - 20\n  Mono: Capture 3 [30%] [off] Playback 5 [50%] [on]";
+        assert_eq!(
+            parse_amixer(both),
+            (Some(Level { value: 5, max: 20, on: true }), Some(Level { value: 3, max: 30, on: false }))
+        );
+    }
+
+    #[test]
+    fn upower_tight_and_missing_percentage() {
+        // percentage without the space after the colon
+        let tight = "Device: /org/freedesktop/UPower/devices/bat\n  percentage:55%\n  state:               discharging\n";
+        assert_eq!(parse_upower(tight)[0].level, "55%");
+        // a block without any percentage is not a battery
+        let none = "Device: /org/freedesktop/UPower/devices/line_power_AC\n  online:              yes\n";
+        assert_eq!(parse_upower(none), Vec::<PowerDevice>::new());
     }
 }
