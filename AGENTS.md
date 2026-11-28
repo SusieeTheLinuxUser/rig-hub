@@ -7,7 +7,7 @@ Handoff notes for coding agents and fresh sessions. Keep this current after mean
 - `dev` is the default branch. Branch from `origin/dev` and open PRs into `dev` (`gh pr create --base dev`).
 - `main` is prod: `v*` tags on it trigger the release build. A release is a PR from `dev` into `main`, merged with a merge commit.
 - Both branches are protected by the ruleset "Protect dev and prod": no deletion, no force push, changes only through a PR, and CI `test (ubuntu-22.04)`, `test (windows-latest)`, `test (macos-15)` must pass.
-- Nothing else lives on GitHub: delete a branch once its PR is merged (`gh pr merge --delete-branch`).
+- Nothing else lives on GitHub: delete a feature branch once its PR is merged (`gh pr merge --delete-branch`). Never pass `--delete-branch` on a release PR (`dev` into prod): its head branch is `dev`.
 
 ## What it is
 
