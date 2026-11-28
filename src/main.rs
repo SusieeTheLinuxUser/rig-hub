@@ -1323,7 +1323,7 @@ impl App {
                 ui.label(RichText::new("How loud you are to others.").color(p.sub));
                 let max = g.max;
                 if let Some(v) = live_slider(ui, "gain", g.value, 0..=max, move |v| format!("{}%", v * 100 / max.max(1))) {
-                    g.value = v;
+                    // the worker moves the slider once amixer has taken the value
                     send("Mic", "capture", v.to_string());
                 }
             });
@@ -1333,7 +1333,7 @@ impl App {
                 ui.label(RichText::new("Hear yourself through the headphone jack on the mic.").color(p.sub));
                 let max = l.max;
                 if let Some(v) = live_slider(ui, "monitor", l.value, 0..=max, move |v| format!("{}%", v * 100 / max.max(1))) {
-                    l.value = v;
+                    // the worker moves the slider once amixer has taken the value
                     send("Mic", "playback", v.to_string());
                 }
             });
@@ -1342,7 +1342,7 @@ impl App {
             card(ui, p, "Headphone jack volume", |ui| {
                 let max = l.max;
                 if let Some(v) = live_slider(ui, "speaker", l.value, 0..=max, move |v| format!("{}%", v * 100 / max.max(1))) {
-                    l.value = v;
+                    // the worker moves the slider once amixer has taken the value
                     send("Speaker", "playback", v.to_string());
                 }
             });

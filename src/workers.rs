@@ -618,6 +618,21 @@ fn mic_done(st: &mut State, r: &anyhow::Result<()>, cmd: &MicCmd) {
                 g.on = false;
             }
         }
+        ("Mic", "capture", v) => {
+            if let (Some(g), Ok(v)) = (&mut m.gain, v.parse()) {
+                g.value = v;
+            }
+        }
+        ("Mic", "playback", v) => {
+            if let (Some(l), Ok(v)) = (&mut m.monitor, v.parse()) {
+                l.value = v;
+            }
+        }
+        ("Speaker", "playback", v) => {
+            if let (Some(l), Ok(v)) = (&mut m.speaker, v.parse()) {
+                l.value = v;
+            }
+        }
         _ => {}
     }
 }
