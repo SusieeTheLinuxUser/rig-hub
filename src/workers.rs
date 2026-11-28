@@ -284,20 +284,22 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
         };
         let Some(k) = &kraken else { continue };
         let r = match cmd {
-            CoolerCmd::Brightness(pct) => k.set_brightness(pct).map(|()| {
-                update(&st, &ctx, |s| {
-                    if let Dev::Ok(c) = &mut s.cooler {
-                        c.brightness = pct;
-                    }
-                });
-                "Brightness set"
-            }),
-            CoolerCmd::Liquid => k.show_liquid().map(|()| "Showing liquid temperature"),
+            CoolerCmd::Brightness(pct) => {
+                let r = k.set_brightness(pct);
+                update(&st, &ctx, |s| brightness_done(s, &r, pct));
+                r.map(|()| "Brightness set")
+            }
+            CoolerCmd::Liquid => {
+                let r = k.show_liquid();
+                update(&st, &ctx, |s| lcd_done(s, &r, None));
+                r.map(|()| "Showing liquid temperature")
+            }
             CoolerCmd::Show(path, angle) => {
                 update(&st, &ctx, |s| s.busy = Some("Uploading to the LCD…"));
                 let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
                 let r = if gif { k.show_gif(&path, angle) } else { k.show_image(&path, angle) };
                 update(&st, &ctx, |s| s.busy = None);
+                update(&st, &ctx, |s| lcd_done(s, &r, Some(path.clone())));
                 r.map(|()| "LCD updated")
             }
         };
@@ -308,6 +310,25 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
                 kraken = None; // reopen next round in case it was unplugged
             }
         }
+    }
+}
+
+/// The slider moves to `pct` only when the device accepted it, so it never shows a
+/// brightness the cooler refused.
+fn brightness_done(st: &mut State, r: &anyhow::Result<()>, pct: u8) {
+    if r.is_ok()
+        && let Dev::Ok(c) = &mut st.cooler
+    {
+        c.brightness = pct;
+    }
+}
+
+/// `settings.lcd_image` moves to what the LCD now shows, but only when the device took the
+/// content; on failure it keeps the old image, the thing the screen is still showing. The UI
+/// saves settings to disk when they drift from its last saved copy, so this persists.
+fn lcd_done(st: &mut State, r: &anyhow::Result<()>, new: Option<PathBuf>) {
+    if r.is_ok() {
+        st.settings.lcd_image = new;
     }
 }
 
@@ -569,5 +590,34 @@ mod tests {
         // no directory to write into: false, not a panic
         assert!(!crate::write_atomic(&dir.join("no/such/dir/f"), "x", false));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn brightness_sticks_only_when_the_device_takes_it() {
+        let mut st = State { cooler: Dev::Ok(Cooler { name: "Kraken Elite", brightness: 30 }), ..Default::default() };
+        // refused: the slider keeps the value the cooler still runs at
+        brightness_done(&mut st, &Err(anyhow::anyhow!("unplugged")), 80);
+        assert!(st.cooler.ok().unwrap().brightness == 30, "a refused brightness must not move the slider");
+        // accepted: now it moves
+        brightness_done(&mut st, &Ok(()), 80);
+        assert!(st.cooler.ok().unwrap().brightness == 80);
+    }
+
+    #[test]
+    fn lcd_image_sticks_only_when_the_device_takes_it() {
+        let old = std::env::temp_dir().join("rig-hub-test-old.png");
+        let new = std::env::temp_dir().join("rig-hub-test-new.gif");
+        let mut st = State { settings: Settings { lcd_image: Some(old.clone()), ..Default::default() }, ..Default::default() };
+        // refused switch back to the liquid temperature: the stored image stays
+        lcd_done(&mut st, &Err(anyhow::anyhow!("unplugged")), None);
+        assert!(st.settings.lcd_image == Some(old.clone()), "a refused change must keep the stored image");
+        // accepted switch: now it clears
+        lcd_done(&mut st, &Ok(()), None);
+        assert!(st.settings.lcd_image.is_none());
+        // same for storing a picked image: refused keeps nothing stored, accepted stores it
+        lcd_done(&mut st, &Err(anyhow::anyhow!("upload failed")), Some(new.clone()));
+        assert!(st.settings.lcd_image.is_none());
+        lcd_done(&mut st, &Ok(()), Some(new.clone()));
+        assert!(st.settings.lcd_image == Some(new));
     }
 }

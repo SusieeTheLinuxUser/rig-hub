@@ -889,7 +889,7 @@ impl App {
                     ui.label(RichText::new("Show").color(p.sub));
                     ui.horizontal(|ui| {
                         if ui.selectable_label(settings.lcd_image.is_none(), "💧 Liquid temperature").clicked() {
-                            settings.lcd_image = None;
+                            // the worker clears the stored image once the LCD has switched
                             let _ = self.w.cooler.send(CoolerCmd::Liquid);
                         }
                         let label = match &settings.lcd_image {
@@ -907,7 +907,7 @@ impl App {
 
                     ui.label(RichText::new("Brightness").color(p.sub));
                     if let Some(v) = live_slider(ui, "brightness", c.brightness as u32, 0..=100, |v| format!("{v}%")) {
-                        c.brightness = v as u8;
+                        // the worker moves the slider once the cooler has taken the value
                         let _ = self.w.cooler.send(CoolerCmd::Brightness(v as u8));
                     }
                     ui.add_space(8.0);
@@ -958,9 +958,8 @@ impl App {
         else {
             return;
         };
-        let mut st = self.st.lock().unwrap();
-        let angle = st.settings.lcd_angle;
-        st.settings.lcd_image = Some(path.clone());
+        // the worker stores the image once the upload has succeeded
+        let angle = self.st.lock().unwrap().settings.lcd_angle;
         let _ = self.w.cooler.send(CoolerCmd::Show(path, angle));
     }
 
