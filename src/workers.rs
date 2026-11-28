@@ -458,7 +458,10 @@ fn headset(st: Shared, ctx: Context, rx: Receiver<HeadsetCmd>) {
         let dev = match audio::headset() {
             Ok(Some(h)) => Dev::Ok(h),
             Ok(None) => Dev::Missing("No headset found by headsetcontrol.".into()),
-            Err(_) => Dev::Missing("Needs HeadsetControl (github.com/Sapd/HeadsetControl).".into()),
+            Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => {
+                Dev::Missing("Needs HeadsetControl (github.com/Sapd/HeadsetControl).".into())
+            }
+            Err(e) => Dev::Missing(format!("{e:#}")),
         };
         if let Dev::Ok(h) = &dev {
             match h.battery {
