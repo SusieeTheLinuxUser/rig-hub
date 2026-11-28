@@ -685,6 +685,130 @@ mod tests {
     }
 
     #[test]
+    fn rotation_sticks_only_when_the_device_takes_it() {
+        let mut st = State { settings: Settings { lcd_angle: 0.0, ..Default::default() }, ..Default::default() };
+        // refused rotation: settings keep the angle the LCD is still showing
+        angle_done(&mut st, &Err(anyhow::anyhow!("unplugged")), 90.0);
+        assert!(st.settings.lcd_angle == 0.0, "a refused rotation must not move the stored angle");
+        // accepted rotation: now it moves
+        angle_done(&mut st, &Ok(()), 90.0);
+        assert!(st.settings.lcd_angle == 90.0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mouse_action_sticks_only_when_ratbagd_takes_it() {
+        use crate::mouse::{Action, Button, Mouse, Profile};
+        let btn_path: zbus::OwnedObjectPath = "/org/ratbag/profile0/button4".try_into().unwrap();
+        let mut st = State {
+            mouse: Dev::Ok(Mouse {
+                path: "/org/ratbag/device0".try_into().unwrap(),
+                name: "G502 HERO".into(),
+                model: "g502-hero".into(),
+                profiles: vec![Profile {
+                    path: "/org/ratbag/profile0".try_into().unwrap(),
+                    index: 0,
+                    active: true,
+                    resolutions: vec![],
+                    buttons: vec![Button { path: btn_path.clone(), index: 4, action: Action::None, types: vec![] }],
+                }],
+            }),
+            ..Default::default()
+        };
+        // refused action: the button keeps what the mouse still does
+        let act = MouseCmd::Action(btn_path.clone(), Action::Button(5));
+        mouse_done(&mut st, &Err(anyhow::anyhow!("commit failed")), &act);
+        assert!(st.mouse.ok().unwrap().profiles[0].buttons[0].action == Action::None, "a refused action must not change the button");
+        // accepted action: now it changes
+        mouse_done(&mut st, &Ok(()), &act);
+        assert!(st.mouse.ok().unwrap().profiles[0].buttons[0].action == Action::Button(5));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mouse_dpi_sticks_only_when_ratbagd_takes_it() {
+        use crate::mouse::{Mouse, Profile, Resolution};
+        let res_path: zbus::OwnedObjectPath = "/org/ratbag/profile0/resolution0".try_into().unwrap();
+        let mut st = State {
+            mouse: Dev::Ok(Mouse {
+                path: "/org/ratbag/device0".try_into().unwrap(),
+                name: "G502 HERO".into(),
+                model: "g502-hero".into(),
+                profiles: vec![Profile {
+                    path: "/org/ratbag/profile0".try_into().unwrap(),
+                    index: 0,
+                    active: true,
+                    resolutions: vec![Resolution { path: res_path.clone(), index: 0, dpi: 800, pair: true, allowed: vec![400, 800, 1600], active: true, default: false }],
+                    buttons: vec![],
+                }],
+            }),
+            ..Default::default()
+        };
+        // refused DPI: the stage keeps the value the mouse still runs at
+        let dpi = MouseCmd::Dpi(Resolution { path: res_path, index: 0, dpi: 800, pair: true, allowed: vec![400, 800, 1600], active: true, default: false }, 1600);
+        mouse_done(&mut st, &Err(anyhow::anyhow!("commit failed")), &dpi);
+        assert!(st.mouse.ok().unwrap().profiles[0].resolutions[0].dpi == 800, "a refused DPI must not move the stage");
+        // accepted DPI: now it changes
+        mouse_done(&mut st, &Ok(()), &dpi);
+        assert!(st.mouse.ok().unwrap().profiles[0].resolutions[0].dpi == 1600);
+    }
+
+    #[test]
+    fn mic_mute_sticks_only_when_amixer_takes_it() {
+        let mut st = State {
+            mic: Dev::Ok(Mic {
+                card: "2".into(),
+                monitor: Some(audio::Level { value: 0, max: 100, on: true }),
+                gain: Some(audio::Level { value: 60, max: 100, on: true }),
+                speaker: Some(audio::Level { value: 10, max: 100, on: true }),
+            }),
+            ..Default::default()
+        };
+        // refused mute: the switch stays where the mic has it
+        let mute = MicCmd { control: "Mic", direction: "capture", value: "nocap".into() };
+        mic_done(&mut st, &Err(anyhow::anyhow!("no such control")), &mute);
+        assert!(st.mic.ok().unwrap().gain.as_ref().unwrap().on, "a refused mute must not flip the switch");
+        // accepted mute: now it flips
+        mic_done(&mut st, &Ok(()), &mute);
+        assert!(!st.mic.ok().unwrap().gain.as_ref().unwrap().on);
+        // and back the other way
+        let unmute = MicCmd { control: "Mic", direction: "capture", value: "cap".into() };
+        mic_done(&mut st, &Ok(()), &unmute);
+        assert!(st.mic.ok().unwrap().gain.as_ref().unwrap().on);
+    }
+
+    #[test]
+    fn mic_levels_stick_only_when_amixer_takes_it() {
+        let mut st = State {
+            mic: Dev::Ok(Mic {
+                card: "2".into(),
+                monitor: Some(audio::Level { value: 0, max: 100, on: true }),
+                gain: Some(audio::Level { value: 60, max: 100, on: true }),
+                speaker: Some(audio::Level { value: 10, max: 100, on: true }),
+            }),
+            ..Default::default()
+        };
+        // refused gain: the slider keeps what the mic still runs at
+        let gain = MicCmd { control: "Mic", direction: "capture", value: "80".into() };
+        mic_done(&mut st, &Err(anyhow::anyhow!("no such control")), &gain);
+        assert!(st.mic.ok().unwrap().gain.as_ref().unwrap().value == 60, "a refused gain must not move the slider");
+        // accepted gain: now it moves
+        mic_done(&mut st, &Ok(()), &gain);
+        assert!(st.mic.ok().unwrap().gain.as_ref().unwrap().value == 80);
+        // monitor and headphone jack volume: same rule
+        let mon = MicCmd { control: "Mic", direction: "playback", value: "40".into() };
+        mic_done(&mut st, &Err(anyhow::anyhow!("no such control")), &mon);
+        assert!(st.mic.ok().unwrap().monitor.as_ref().unwrap().value == 0);
+        mic_done(&mut st, &Ok(()), &mon);
+        assert!(st.mic.ok().unwrap().monitor.as_ref().unwrap().value == 40);
+        let spk = MicCmd { control: "Speaker", direction: "playback", value: "25".into() };
+        mic_done(&mut st, &Err(anyhow::anyhow!("no such control")), &spk);
+        assert!(st.mic.ok().unwrap().speaker.as_ref().unwrap().value == 10);
+        mic_done(&mut st, &Ok(()), &spk);
+        assert!(st.mic.ok().unwrap().speaker.as_ref().unwrap().value == 25);
+    }
+
+    #[test]
     fn lcd_image_sticks_only_when_the_device_takes_it() {
         let old = std::env::temp_dir().join("rig-hub-test-old.png");
         let new = std::env::temp_dir().join("rig-hub-test-new.gif");
