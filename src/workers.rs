@@ -300,6 +300,7 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
                 let r = if gif { k.show_gif(&path, angle) } else { k.show_image(&path, angle) };
                 update(&st, &ctx, |s| s.busy = None);
                 update(&st, &ctx, |s| lcd_done(s, &r, Some(path.clone())));
+                update(&st, &ctx, |s| angle_done(s, &r, angle));
                 r.map(|()| "LCD updated")
             }
         };
@@ -329,6 +330,15 @@ fn brightness_done(st: &mut State, r: &anyhow::Result<()>, pct: u8) {
 fn lcd_done(st: &mut State, r: &anyhow::Result<()>, new: Option<PathBuf>) {
     if r.is_ok() {
         st.settings.lcd_image = new;
+    }
+}
+
+/// The rotation reaches settings only when the LCD accepted it, so a failed upload keeps
+/// the angle the screen is still showing. The UI saves settings to disk when they drift
+/// from its last saved copy, so this persists.
+fn angle_done(st: &mut State, r: &anyhow::Result<()>, angle: f32) {
+    if r.is_ok() {
+        st.settings.lcd_angle = angle;
     }
 }
 

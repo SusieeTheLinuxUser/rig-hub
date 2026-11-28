@@ -936,9 +936,10 @@ impl App {
                         });
                         if let Some(a) = commit {
                             ui.data_mut(|d| d.remove::<f32>(id));
-                            settings.lcd_angle = (a + 180.0).rem_euclid(360.0) - 180.0;
+                            let angle = (a + 180.0).rem_euclid(360.0) - 180.0;
+                            // the worker stores the angle once the LCD has taken the rotation
                             if let Some(path) = &settings.lcd_image {
-                                let _ = self.w.cooler.send(CoolerCmd::Show(path.clone(), settings.lcd_angle));
+                                let _ = self.w.cooler.send(CoolerCmd::Show(path.clone(), angle));
                             }
                         }
                     });
