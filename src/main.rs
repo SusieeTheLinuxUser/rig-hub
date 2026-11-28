@@ -1315,7 +1315,7 @@ impl App {
                 .corner_radius(14)
                 .min_size(vec2(200.0, 56.0));
             if ui.add(btn).on_hover_text("Same as the mute button on the mic").clicked() {
-                g.on = !live;
+                // the worker flips the switch once amixer has taken it
                 send("Mic", "capture", if live { "nocap" } else { "cap" }.into());
             }
             ui.add_space(6.0);

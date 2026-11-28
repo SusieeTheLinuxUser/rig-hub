@@ -586,15 +586,39 @@ fn mic(st: Shared, ctx: Context, rx: Receiver<MicCmd>) {
         // short poll: the mute button on the mic flips the capture switch
         match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(cmd) => {
-                if let Some(card) = card
-                    && let Err(e) = audio::mixer_set(&card, cmd.control, cmd.direction, &cmd.value)
-                {
-                    toast(&st, &ctx, format!("Mic: {e:#}"), true);
+                if let Some(card) = card {
+                    let r = audio::mixer_set(&card, cmd.control, cmd.direction, &cmd.value);
+                    update(&st, &ctx, |s| mic_done(s, &r, &cmd));
+                    if let Err(e) = r {
+                        toast(&st, &ctx, format!("Mic: {e:#}"), true);
+                    }
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
+    }
+}
+
+/// The Yeti's controls change in `State` only when amixer took the value; the UI reads
+/// `State`, so it never shows a switch or level the mic refused.
+fn mic_done(st: &mut State, r: &anyhow::Result<()>, cmd: &MicCmd) {
+    if r.is_err() {
+        return;
+    }
+    let Dev::Ok(m) = &mut st.mic else { return };
+    match (cmd.control, cmd.direction, cmd.value.as_str()) {
+        ("Mic", "capture", "cap") => {
+            if let Some(g) = &mut m.gain {
+                g.on = true;
+            }
+        }
+        ("Mic", "capture", "nocap") => {
+            if let Some(g) = &mut m.gain {
+                g.on = false;
+            }
+        }
+        _ => {}
     }
 }
 
