@@ -300,6 +300,7 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
                 let r = if gif { k.show_gif(&path, angle) } else { k.show_image(&path, angle) };
                 update(&st, &ctx, |s| s.busy = None);
                 update(&st, &ctx, |s| lcd_done(s, &r, Some(path.clone())));
+                update(&st, &ctx, |s| angle_done(s, &r, angle));
                 r.map(|()| "LCD updated")
             }
         };
@@ -329,6 +330,15 @@ fn brightness_done(st: &mut State, r: &anyhow::Result<()>, pct: u8) {
 fn lcd_done(st: &mut State, r: &anyhow::Result<()>, new: Option<PathBuf>) {
     if r.is_ok() {
         st.settings.lcd_image = new;
+    }
+}
+
+/// The rotation reaches settings only when the LCD accepted it, so a failed upload keeps
+/// the angle the screen is still showing. The UI saves settings to disk when they drift
+/// from its last saved copy, so this persists.
+fn angle_done(st: &mut State, r: &anyhow::Result<()>, angle: f32) {
+    if r.is_ok() {
+        st.settings.lcd_angle = angle;
     }
 }
 
@@ -402,13 +412,14 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
                     None => continue,
                 };
                 update(&st, &ctx, |s| s.busy = Some("Saving to the mouse…"));
-                let r = match cmd {
-                    MouseCmd::Action(button, action) => rb.set_action(&button, &action),
-                    MouseCmd::Dpi(res, dpi) => rb.set_dpi(&res, dpi),
-                    MouseCmd::Activate(path, iface) => rb.set_active(&path, iface),
+                let r = match &cmd {
+                    MouseCmd::Action(button, action) => rb.set_action(button, action),
+                    MouseCmd::Dpi(res, dpi) => rb.set_dpi(res, *dpi),
+                    MouseCmd::Activate(path, iface) => rb.set_active(path, iface),
                     };
                 let r = r.and_then(|()| rb.commit(&device));
                 update(&st, &ctx, |s| s.busy = None);
+                update(&st, &ctx, |s| mouse_done(s, &r, &cmd));
                 report(&st, &ctx, r, "Saved to the mouse");
                 reload = true;
                 last = None;
@@ -468,6 +479,37 @@ fn mouse(st: Shared, ctx: Context, rx: Receiver<MouseCmd>) {
                     .ok();
             }
         }
+    }
+}
+
+/// The mouse keeps a change only when ratbagd took it; the UI reads `State`, so it never
+/// shows a button or DPI the mouse refused.
+#[cfg(target_os = "linux")]
+fn mouse_done(st: &mut State, r: &anyhow::Result<()>, cmd: &MouseCmd) {
+    if r.is_err() {
+        return;
+    }
+    let Dev::Ok(m) = &mut st.mouse else { return };
+    match cmd {
+        MouseCmd::Action(path, action) => {
+            for p in &mut m.profiles {
+                for b in &mut p.buttons {
+                    if b.path == *path {
+                        b.action = action.clone();
+                    }
+                }
+            }
+        }
+        MouseCmd::Dpi(res, dpi) => {
+            for p in &mut m.profiles {
+                for x in &mut p.resolutions {
+                    if x.path == res.path {
+                        x.dpi = *dpi;
+                    }
+                }
+            }
+        }
+        MouseCmd::Activate(..) => {} // the next reload picks up the new active flags from ratbagd
     }
 }
 
@@ -544,15 +586,54 @@ fn mic(st: Shared, ctx: Context, rx: Receiver<MicCmd>) {
         // short poll: the mute button on the mic flips the capture switch
         match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(cmd) => {
-                if let Some(card) = card
-                    && let Err(e) = audio::mixer_set(&card, cmd.control, cmd.direction, &cmd.value)
-                {
-                    toast(&st, &ctx, format!("Mic: {e:#}"), true);
+                if let Some(card) = card {
+                    let r = audio::mixer_set(&card, cmd.control, cmd.direction, &cmd.value);
+                    update(&st, &ctx, |s| mic_done(s, &r, &cmd));
+                    if let Err(e) = r {
+                        toast(&st, &ctx, format!("Mic: {e:#}"), true);
+                    }
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
+    }
+}
+
+/// The Yeti's controls change in `State` only when amixer took the value; the UI reads
+/// `State`, so it never shows a switch or level the mic refused.
+fn mic_done(st: &mut State, r: &anyhow::Result<()>, cmd: &MicCmd) {
+    if r.is_err() {
+        return;
+    }
+    let Dev::Ok(m) = &mut st.mic else { return };
+    match (cmd.control, cmd.direction, cmd.value.as_str()) {
+        ("Mic", "capture", "cap") => {
+            if let Some(g) = &mut m.gain {
+                g.on = true;
+            }
+        }
+        ("Mic", "capture", "nocap") => {
+            if let Some(g) = &mut m.gain {
+                g.on = false;
+            }
+        }
+        ("Mic", "capture", v) => {
+            if let (Some(g), Ok(v)) = (&mut m.gain, v.parse()) {
+                g.value = v;
+            }
+        }
+        ("Mic", "playback", v) => {
+            if let (Some(l), Ok(v)) = (&mut m.monitor, v.parse()) {
+                l.value = v;
+            }
+        }
+        ("Speaker", "playback", v) => {
+            if let (Some(l), Ok(v)) = (&mut m.speaker, v.parse()) {
+                l.value = v;
+            }
+        }
+        _ => {}
     }
 }
 
@@ -601,6 +682,130 @@ mod tests {
         // accepted: now it moves
         brightness_done(&mut st, &Ok(()), 80);
         assert!(st.cooler.ok().unwrap().brightness == 80);
+    }
+
+    #[test]
+    fn rotation_sticks_only_when_the_device_takes_it() {
+        let mut st = State { settings: Settings { lcd_angle: 0.0, ..Default::default() }, ..Default::default() };
+        // refused rotation: settings keep the angle the LCD is still showing
+        angle_done(&mut st, &Err(anyhow::anyhow!("unplugged")), 90.0);
+        assert!(st.settings.lcd_angle == 0.0, "a refused rotation must not move the stored angle");
+        // accepted rotation: now it moves
+        angle_done(&mut st, &Ok(()), 90.0);
+        assert!(st.settings.lcd_angle == 90.0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mouse_action_sticks_only_when_ratbagd_takes_it() {
+        use crate::mouse::{Action, Button, Mouse, Profile};
+        let btn_path: zbus::OwnedObjectPath = "/org/ratbag/profile0/button4".try_into().unwrap();
+        let mut st = State {
+            mouse: Dev::Ok(Mouse {
+                path: "/org/ratbag/device0".try_into().unwrap(),
+                name: "G502 HERO".into(),
+                model: "g502-hero".into(),
+                profiles: vec![Profile {
+                    path: "/org/ratbag/profile0".try_into().unwrap(),
+                    index: 0,
+                    active: true,
+                    resolutions: vec![],
+                    buttons: vec![Button { path: btn_path.clone(), index: 4, action: Action::None, types: vec![] }],
+                }],
+            }),
+            ..Default::default()
+        };
+        // refused action: the button keeps what the mouse still does
+        let act = MouseCmd::Action(btn_path.clone(), Action::Button(5));
+        mouse_done(&mut st, &Err(anyhow::anyhow!("commit failed")), &act);
+        assert!(st.mouse.ok().unwrap().profiles[0].buttons[0].action == Action::None, "a refused action must not change the button");
+        // accepted action: now it changes
+        mouse_done(&mut st, &Ok(()), &act);
+        assert!(st.mouse.ok().unwrap().profiles[0].buttons[0].action == Action::Button(5));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mouse_dpi_sticks_only_when_ratbagd_takes_it() {
+        use crate::mouse::{Mouse, Profile, Resolution};
+        let res_path: zbus::OwnedObjectPath = "/org/ratbag/profile0/resolution0".try_into().unwrap();
+        let mut st = State {
+            mouse: Dev::Ok(Mouse {
+                path: "/org/ratbag/device0".try_into().unwrap(),
+                name: "G502 HERO".into(),
+                model: "g502-hero".into(),
+                profiles: vec![Profile {
+                    path: "/org/ratbag/profile0".try_into().unwrap(),
+                    index: 0,
+                    active: true,
+                    resolutions: vec![Resolution { path: res_path.clone(), index: 0, dpi: 800, pair: true, allowed: vec![400, 800, 1600], active: true, default: false }],
+                    buttons: vec![],
+                }],
+            }),
+            ..Default::default()
+        };
+        // refused DPI: the stage keeps the value the mouse still runs at
+        let dpi = MouseCmd::Dpi(Resolution { path: res_path, index: 0, dpi: 800, pair: true, allowed: vec![400, 800, 1600], active: true, default: false }, 1600);
+        mouse_done(&mut st, &Err(anyhow::anyhow!("commit failed")), &dpi);
+        assert!(st.mouse.ok().unwrap().profiles[0].resolutions[0].dpi == 800, "a refused DPI must not move the stage");
+        // accepted DPI: now it changes
+        mouse_done(&mut st, &Ok(()), &dpi);
+        assert!(st.mouse.ok().unwrap().profiles[0].resolutions[0].dpi == 1600);
+    }
+
+    #[test]
+    fn mic_mute_sticks_only_when_amixer_takes_it() {
+        let mut st = State {
+            mic: Dev::Ok(Mic {
+                card: "2".into(),
+                monitor: Some(audio::Level { value: 0, max: 100, on: true }),
+                gain: Some(audio::Level { value: 60, max: 100, on: true }),
+                speaker: Some(audio::Level { value: 10, max: 100, on: true }),
+            }),
+            ..Default::default()
+        };
+        // refused mute: the switch stays where the mic has it
+        let mute = MicCmd { control: "Mic", direction: "capture", value: "nocap".into() };
+        mic_done(&mut st, &Err(anyhow::anyhow!("no such control")), &mute);
+        assert!(st.mic.ok().unwrap().gain.as_ref().unwrap().on, "a refused mute must not flip the switch");
+        // accepted mute: now it flips
+        mic_done(&mut st, &Ok(()), &mute);
+        assert!(!st.mic.ok().unwrap().gain.as_ref().unwrap().on);
+        // and back the other way
+        let unmute = MicCmd { control: "Mic", direction: "capture", value: "cap".into() };
+        mic_done(&mut st, &Ok(()), &unmute);
+        assert!(st.mic.ok().unwrap().gain.as_ref().unwrap().on);
+    }
+
+    #[test]
+    fn mic_levels_stick_only_when_amixer_takes_it() {
+        let mut st = State {
+            mic: Dev::Ok(Mic {
+                card: "2".into(),
+                monitor: Some(audio::Level { value: 0, max: 100, on: true }),
+                gain: Some(audio::Level { value: 60, max: 100, on: true }),
+                speaker: Some(audio::Level { value: 10, max: 100, on: true }),
+            }),
+            ..Default::default()
+        };
+        // refused gain: the slider keeps what the mic still runs at
+        let gain = MicCmd { control: "Mic", direction: "capture", value: "80".into() };
+        mic_done(&mut st, &Err(anyhow::anyhow!("no such control")), &gain);
+        assert!(st.mic.ok().unwrap().gain.as_ref().unwrap().value == 60, "a refused gain must not move the slider");
+        // accepted gain: now it moves
+        mic_done(&mut st, &Ok(()), &gain);
+        assert!(st.mic.ok().unwrap().gain.as_ref().unwrap().value == 80);
+        // monitor and headphone jack volume: same rule
+        let mon = MicCmd { control: "Mic", direction: "playback", value: "40".into() };
+        mic_done(&mut st, &Err(anyhow::anyhow!("no such control")), &mon);
+        assert!(st.mic.ok().unwrap().monitor.as_ref().unwrap().value == 0);
+        mic_done(&mut st, &Ok(()), &mon);
+        assert!(st.mic.ok().unwrap().monitor.as_ref().unwrap().value == 40);
+        let spk = MicCmd { control: "Speaker", direction: "playback", value: "25".into() };
+        mic_done(&mut st, &Err(anyhow::anyhow!("no such control")), &spk);
+        assert!(st.mic.ok().unwrap().speaker.as_ref().unwrap().value == 10);
+        mic_done(&mut st, &Ok(()), &spk);
+        assert!(st.mic.ok().unwrap().speaker.as_ref().unwrap().value == 25);
     }
 
     #[test]

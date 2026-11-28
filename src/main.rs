@@ -873,6 +873,8 @@ impl App {
         });
         ui.add_space(4.0);
 
+        // relative rotation reads the confirmed angle, so wait for an upload to finish first
+        let uploading = st.busy.is_some();
         let c = match &mut st.cooler {
             Dev::Ok(c) => c,
             Dev::Missing(why) => return missing(ui, p, "LCD unavailable", why, &[]),
@@ -913,7 +915,7 @@ impl App {
                     ui.add_space(8.0);
 
                     ui.label(RichText::new("Rotation").color(p.sub));
-                    ui.add_enabled_ui(settings.lcd_image.is_some(), |ui| {
+                    ui.add_enabled_ui(settings.lcd_image.is_some() && !uploading, |ui| {
                         let id = ui.scope_id().with("angle");
                         let mut a = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(settings.lcd_angle);
                         let mut commit = None;
@@ -936,9 +938,10 @@ impl App {
                         });
                         if let Some(a) = commit {
                             ui.data_mut(|d| d.remove::<f32>(id));
-                            settings.lcd_angle = (a + 180.0).rem_euclid(360.0) - 180.0;
+                            let angle = (a + 180.0).rem_euclid(360.0) - 180.0;
+                            // the worker stores the angle once the LCD has taken the rotation
                             if let Some(path) = &settings.lcd_image {
-                                let _ = self.w.cooler.send(CoolerCmd::Show(path.clone(), settings.lcd_angle));
+                                let _ = self.w.cooler.send(CoolerCmd::Show(path.clone(), angle));
                             }
                         }
                     });
@@ -1188,8 +1191,8 @@ impl App {
                 });
             });
             if let Some(a) = set {
-                let _ = self.w.mouse.send(MouseCmd::Action(b.path.clone(), a.clone()));
-                b.action = a; // optimistic; the worker reloads after saving
+                // the worker applies the action once ratbagd has taken it
+                let _ = self.w.mouse.send(MouseCmd::Action(b.path.clone(), a));
             }
         }
 
@@ -1212,8 +1215,8 @@ impl App {
                         None
                     };
                     if let Some(dpi) = new.filter(|&d| d != r.dpi) {
+                        // the worker applies the DPI once ratbagd has taken it
                         let _ = self.w.mouse.send(MouseCmd::Dpi(r.clone(), dpi));
-                        r.dpi = dpi;
                     }
                     if r.default {
                         ui.label(RichText::new("default").small().color(p.sub));
@@ -1314,7 +1317,7 @@ impl App {
                 .corner_radius(14)
                 .min_size(vec2(200.0, 56.0));
             if ui.add(btn).on_hover_text("Same as the mute button on the mic").clicked() {
-                g.on = !live;
+                // the worker flips the switch once amixer has taken it
                 send("Mic", "capture", if live { "nocap" } else { "cap" }.into());
             }
             ui.add_space(6.0);
@@ -1322,7 +1325,7 @@ impl App {
                 ui.label(RichText::new("How loud you are to others.").color(p.sub));
                 let max = g.max;
                 if let Some(v) = live_slider(ui, "gain", g.value, 0..=max, move |v| format!("{}%", v * 100 / max.max(1))) {
-                    g.value = v;
+                    // the worker moves the slider once amixer has taken the value
                     send("Mic", "capture", v.to_string());
                 }
             });
@@ -1332,7 +1335,7 @@ impl App {
                 ui.label(RichText::new("Hear yourself through the headphone jack on the mic.").color(p.sub));
                 let max = l.max;
                 if let Some(v) = live_slider(ui, "monitor", l.value, 0..=max, move |v| format!("{}%", v * 100 / max.max(1))) {
-                    l.value = v;
+                    // the worker moves the slider once amixer has taken the value
                     send("Mic", "playback", v.to_string());
                 }
             });
@@ -1341,7 +1344,7 @@ impl App {
             card(ui, p, "Headphone jack volume", |ui| {
                 let max = l.max;
                 if let Some(v) = live_slider(ui, "speaker", l.value, 0..=max, move |v| format!("{}%", v * 100 / max.max(1))) {
-                    l.value = v;
+                    // the worker moves the slider once amixer has taken the value
                     send("Speaker", "playback", v.to_string());
                 }
             });
