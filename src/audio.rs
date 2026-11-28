@@ -158,8 +158,13 @@ pub fn parse_amixer(text: &str) -> (Option<Level>, Option<Level>) {
             let words: Vec<&str> = line.split_whitespace().collect();
             for (i, w) in words.iter().enumerate() {
                 let Some(value) = words.get(i + 1).and_then(|v| v.parse::<u32>().ok()) else { continue };
-                // the [on]/[off] switch is the first bracket after the value that says on/off
-                let on = words[i + 2..].iter().take(4).find(|s| **s == "[on]" || **s == "[off]") != Some(&"[off]");
+                // the [on]/[off] switch is the first bracket after the value that says
+                // on/off, within this channel's own tokens: never the next channel's switch
+                let next = words[i + 2..].iter().position(|s| *s == "Playback" || *s == "Capture");
+                let on = words[i + 2..next.map_or(words.len(), |p| i + 2 + p)]
+                    .iter()
+                    .find(|s| **s == "[on]" || **s == "[off]")
+                    != Some(&"[off]");
                 match *w {
                     "Playback" => play = Some(Level { value, max: max.0.unwrap_or(value), on }),
                     "Capture" => cap = Some(Level { value, max: max.1.unwrap_or(value), on }),
@@ -292,6 +297,17 @@ Device: /org/freedesktop/UPower/devices/DisplayDevice
     #[test]
     fn failed_command_is_an_error() {
         assert!(run("sh", &["-c", "exit 1"]).is_err());
+    }
+
+    #[test]
+    fn amixer_switch_belongs_to_its_own_channel() {
+        // playback has no switch of its own here, so capture's [off] behind it
+        // must not mute the playback
+        let mixed = "Simple mixer control 'Mic',0\n  Limits: Capture 0 - 30\n  Front Left: Playback 11 [55%] Capture 21 [off]";
+        assert_eq!(
+            parse_amixer(mixed),
+            (Some(Level { value: 11, max: 11, on: true }), Some(Level { value: 21, max: 30, on: false }))
+        );
     }
 
     #[test]
