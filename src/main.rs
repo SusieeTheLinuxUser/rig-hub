@@ -889,7 +889,7 @@ impl App {
                     ui.label(RichText::new("Show").color(p.sub));
                     ui.horizontal(|ui| {
                         if ui.selectable_label(settings.lcd_image.is_none(), "💧 Liquid temperature").clicked() {
-                            settings.lcd_image = None;
+                            // the worker clears the stored image once the LCD has switched
                             let _ = self.w.cooler.send(CoolerCmd::Liquid);
                         }
                         let label = match &settings.lcd_image {

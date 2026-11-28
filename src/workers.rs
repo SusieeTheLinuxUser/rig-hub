@@ -289,7 +289,11 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
                 update(&st, &ctx, |s| brightness_done(s, &r, pct));
                 r.map(|()| "Brightness set")
             }
-            CoolerCmd::Liquid => k.show_liquid().map(|()| "Showing liquid temperature"),
+            CoolerCmd::Liquid => {
+                let r = k.show_liquid();
+                update(&st, &ctx, |s| lcd_done(s, &r, None));
+                r.map(|()| "Showing liquid temperature")
+            }
             CoolerCmd::Show(path, angle) => {
                 update(&st, &ctx, |s| s.busy = Some("Uploading to the LCD…"));
                 let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
@@ -315,6 +319,15 @@ fn brightness_done(st: &mut State, r: &anyhow::Result<()>, pct: u8) {
         && let Dev::Ok(c) = &mut st.cooler
     {
         c.brightness = pct;
+    }
+}
+
+/// `settings.lcd_image` moves to what the LCD now shows, but only when the device took the
+/// content; on failure it keeps the old image, the thing the screen is still showing. The UI
+/// saves settings to disk when they drift from its last saved copy, so this persists.
+fn lcd_done(st: &mut State, r: &anyhow::Result<()>, new: Option<PathBuf>) {
+    if r.is_ok() {
+        st.settings.lcd_image = new;
     }
 }
 
@@ -587,5 +600,23 @@ mod tests {
         // accepted: now it moves
         brightness_done(&mut st, &Ok(()), 80);
         assert!(st.cooler.ok().unwrap().brightness == 80);
+    }
+
+    #[test]
+    fn lcd_image_sticks_only_when_the_device_takes_it() {
+        let old = std::env::temp_dir().join("rig-hub-test-old.png");
+        let new = std::env::temp_dir().join("rig-hub-test-new.gif");
+        let mut st = State { settings: Settings { lcd_image: Some(old.clone()), ..Default::default() }, ..Default::default() };
+        // refused switch back to the liquid temperature: the stored image stays
+        lcd_done(&mut st, &Err(anyhow::anyhow!("unplugged")), None);
+        assert!(st.settings.lcd_image == Some(old.clone()), "a refused change must keep the stored image");
+        // accepted switch: now it clears
+        lcd_done(&mut st, &Ok(()), None);
+        assert!(st.settings.lcd_image.is_none());
+        // same for storing a picked image: refused keeps nothing stored, accepted stores it
+        lcd_done(&mut st, &Err(anyhow::anyhow!("upload failed")), Some(new.clone()));
+        assert!(st.settings.lcd_image.is_none());
+        lcd_done(&mut st, &Ok(()), Some(new.clone()));
+        assert!(st.settings.lcd_image == Some(new));
     }
 }
