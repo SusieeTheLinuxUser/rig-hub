@@ -102,7 +102,9 @@ pub struct PowerDevice {
 
 /// Battery-powered devices UPower knows about (UPS, wireless mice, controllers…) from `upower --dump`.
 pub fn parse_upower(text: &str) -> Vec<PowerDevice> {
-    text.split("\n\n")
+    // blocks are separated by an empty line; normalize \r\n so the split still finds them
+    text.replace("\r\n", "\n")
+        .split("\n\n")
         .filter_map(|block| {
             let field = |k: &str| block.lines().find_map(|l| l.trim().strip_prefix(k)).map(str::trim);
             let path = field("Device:")?;
@@ -337,6 +339,19 @@ Device: /org/freedesktop/UPower/devices/DisplayDevice
         // no model line: the object path's last part stands in
         let no_model = "Device: /org/freedesktop/UPower/devices/mouse_hidpp_battery_2\n  percentage:          55%\n  state:               discharging\n";
         assert_eq!(parse_upower(no_model)[0].name, "mouse_hidpp_battery_2");
+    }
+
+    #[test]
+    fn upower_crlf_keeps_every_block() {
+        // a dump with \r\n line endings must not collapse into one block
+        let crlf = "Device: /org/freedesktop/UPower/devices/ups_a\r\n  percentage:          40%\r\n  state:               discharging\r\n\r\nDevice: /org/freedesktop/UPower/devices/mouse_b\r\n  percentage:          60%\r\n  state:               charging\r\n";
+        assert_eq!(
+            parse_upower(crlf),
+            [
+                PowerDevice { name: "ups_a".into(), level: "40%".into(), charging: false },
+                PowerDevice { name: "mouse_b".into(), level: "60%".into(), charging: true },
+            ]
+        );
     }
 
     #[test]
