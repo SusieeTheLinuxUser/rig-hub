@@ -873,6 +873,8 @@ impl App {
         });
         ui.add_space(4.0);
 
+        // relative rotation reads the confirmed angle, so wait for an upload to finish first
+        let uploading = st.busy.is_some();
         let c = match &mut st.cooler {
             Dev::Ok(c) => c,
             Dev::Missing(why) => return missing(ui, p, "LCD unavailable", why, &[]),
@@ -913,7 +915,7 @@ impl App {
                     ui.add_space(8.0);
 
                     ui.label(RichText::new("Rotation").color(p.sub));
-                    ui.add_enabled_ui(settings.lcd_image.is_some(), |ui| {
+                    ui.add_enabled_ui(settings.lcd_image.is_some() && !uploading, |ui| {
                         let id = ui.scope_id().with("angle");
                         let mut a = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(settings.lcd_angle);
                         let mut commit = None;
