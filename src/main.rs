@@ -958,9 +958,8 @@ impl App {
         else {
             return;
         };
-        let mut st = self.st.lock().unwrap();
-        let angle = st.settings.lcd_angle;
-        st.settings.lcd_image = Some(path.clone());
+        // the worker stores the image once the upload has succeeded
+        let angle = self.st.lock().unwrap().settings.lcd_angle;
         let _ = self.w.cooler.send(CoolerCmd::Show(path, angle));
     }
 

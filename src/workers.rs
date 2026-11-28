@@ -299,6 +299,7 @@ fn cooler(st: Shared, ctx: Context, rx: Receiver<CoolerCmd>) {
                 let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
                 let r = if gif { k.show_gif(&path, angle) } else { k.show_image(&path, angle) };
                 update(&st, &ctx, |s| s.busy = None);
+                update(&st, &ctx, |s| lcd_done(s, &r, Some(path.clone())));
                 r.map(|()| "LCD updated")
             }
         };
