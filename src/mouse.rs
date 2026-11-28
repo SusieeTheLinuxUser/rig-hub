@@ -374,6 +374,15 @@ mod tests {
         assert_eq!(reply(&[0x11, 0xFF, 0x0E, 0xB1, 0x02, 0, 0], 0x0E), None);
         assert_eq!(reply(&[0x11, 0xFF, 0xFF, 0x05, 0xBA, 0x02, 0], 0x0E), None);
         assert_eq!(reply(&[0x01, 0x00, 0x00], 0x0E), None); // a plain mouse report
+        // an error reply whose device index isn't 0xFF is for another device
+        assert_eq!(reply(&[0x10, 0x05, 0x8F, 0x0E, 0xBA, 0x09, 0], 0x0E), None);
+        assert_eq!(reply(&[0x11, 0x02, 0xFF, 0x0E, 0xBA, 0x02, 0], 0x0E), None);
+        // an error reply too short to carry its code: keep waiting for the real one
+        assert_eq!(reply(&[0x11, 0xFF, 0xFF, 0x0E, 0xBA], 0x0E), None);
+        // an error reply on our feature but another app's software id
+        assert_eq!(reply(&[0x11, 0xFF, 0xFF, 0x0E, 0xB1, 0x02, 0], 0x0E), None);
+        // a 5-byte HID++ 1.0 reply (short report) still matches on feature + swid
+        assert_eq!(reply(&[0x10, 0xFF, 0x0E, 0xBA, 0x02], 0x0E), Some(Ok(())));
     }
 
     #[test]
@@ -416,5 +425,27 @@ mod tests {
         let odd = Value::Structure(zbus::Structure::from(("800", 1600u32)));
         assert_eq!(dpi_of(&odd), None);
         assert_eq!(dpi_of(&Value::U64(800)), None);
+        // a variant wrapping a variant unwraps all the way down
+        assert_eq!(dpi_of(&Value::Variant(Box::new(Value::Variant(Box::new(Value::U32(800)))))), Some((800, false)));
+        // wrong-typed scalars are no reading rather than a guess
+        assert_eq!(dpi_of(&Value::I32(800)), None);
+        assert_eq!(dpi_of(&Value::Bool(false)), None);
+    }
+
+    #[test]
+    fn actions_survive_wrong_typed_dbus_values() {
+        // a value ratbagd never sends (but an odd dbus peer might) falls back to 0
+        // instead of panicking: Button(0) labels "Mouse button 0" and is not among
+        // the choices, so nothing can be set to it
+        assert_eq!(action_of(BUTTON, &Value::Bool(true)), Action::Button(0));
+        assert_eq!(action_of(BUTTON, &Value::I32(-2)), Action::Button(0));
+        assert_eq!(action_of(SPECIAL, &Value::U16(4)), Action::Special(0));
+        assert_eq!(action_of(KEY, &Value::I64(30)), Action::Key(0));
+        assert_eq!(action_of(BUTTON, &Value::Variant(Box::new(Value::I32(3)))), Action::Button(0));
+        // NONE ignores the value; MACRO maps whatever it gets
+        assert_eq!(action_of(NONE, &Value::U32(7)), Action::None);
+        assert_eq!(action_of(MACRO, &Value::Bool(false)), Action::Macro);
+        // Special(0) has no table entry and still labels safely
+        assert_eq!(Action::Special(0).label(), "Special");
     }
 }
