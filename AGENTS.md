@@ -2,6 +2,13 @@
 
 Handoff notes for coding agents and fresh sessions. Keep this current after meaningful work.
 
+## Branches (since 2026-11-28)
+
+- `dev` is the default branch. Branch from `origin/dev` and open PRs into `dev` (`gh pr create --base dev`).
+- `main` is prod: `v*` tags on it trigger the release build. A release is a PR from `dev` into `main`, merged with a merge commit.
+- Both branches are protected by the ruleset "Protect dev and prod": no deletion, no force push, changes only through a PR, and CI `test (ubuntu-22.04)`, `test (windows-latest)`, `test (macos-15)` must pass.
+- Nothing else lives on GitHub: delete a branch once its PR is merged (`gh pr merge --delete-branch`).
+
 ## What it is
 
 Rig Hub: one native Rust/egui app for a mouse (via ratbagd), NZXT Kraken cooler (temps + LCD), headset (via HeadsetControl) and Blue Yeti mic (via ALSA `amixer`). Tray icon, KDE Plasma 6 widget, six themes. Linux first; Windows/macOS only get the cooler LCD and headset (see the platform table in `README.md`). Alpha. License GPL-3.0-or-later (Kraken LCD code is ported from liquidctl).
